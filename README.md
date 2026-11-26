@@ -1,217 +1,190 @@
-# OpenCPU README_EN
+# 智能信息发布终端（云播报屏）
 
-**English | [中文](README_ZH.md)**
+> **本项目基于 Lierda（利尔达）Cat.1 Bis OpenCPU SDK 二次开发**，实现课程实战项目 10
+> 「智能信息发布终端（云播报屏）」：设备通过 MQTT 接收服务器按 IMEI 点对点下发的屏显消息，
+> 完成分屏显示、TTS 播报、等级灯效与回执，并保证断线重连、掉电恢复与重复消息幂等。
+>
+> - 上游 SDK 原始文档：**[README_LIERDA.md](README_LIERDA.md)**、**[README_LIERDA_ZH.md](README_LIERDA_ZH.md)**
+>   （原 `README.md` / `README_ZH.md`，仅重命名，内容未做任何修改）
+> - 本项目**只新增** `examples/NT26FxDx_OpenKit/demo/src/demo_screen/` 演示工程，
+>   **未修改** `components/`、`rules/`、`tools/` 下的 SDK 内核、底包与工具链
+> - 硬件平台：OpenKit Lite（NT26FxDx / EC718，Cat.1 bis）
 
-# 1 Introduction
+---
 
-OPENSDK is an open SDK development system developed by Lierda for Cat.1 users. The kernel is based on a base package separation architecture built on FreeRTOS, featuring complete task management, memory management, exception management, system clock, and interrupt management. In addition to basic kernel functions, OPENSDK provides rich peripheral management, sleep/wake, secure boot, remote upgrade, and other features for Cat.1 modules, offering developers a "one-stop" complete software platform that effectively lowers the development barrier and shortens the development cycle.
+## 1. 已实现功能
 
-# 2 OPENSDK Architecture
+| 功能 | 说明 |
+|---|---|
+| 设备注册 | 连接自建 broker 后上报 `dev.reg`（学号、项目号、固件版本） |
+| 周期心跳 | 每 30 s 上报二进制 `0xAA` 帧：RSSI(dBm)、运行时长、发送数、成功数、XOR 校验 |
+| 点对点下发 | 订阅 `screen/{imei}/msg`，QoS 1；支持短 JSON 与 `{envelope, data:{...}}` 完整信封两种格式 |
+| 断线重连 | 监听 MQTT 状态，断线后重新拨号、连接、订阅并补发注册 |
+| 消息去重 | 按 `msgId` 幂等：重复消息不重绘、不重播，但仍回执让服务器停止重发 |
+| 分屏显示 | 标题栏 / 正文两行 / 状态栏三区；正文按 128 px 自动折行 |
+| 自动分页 | 超过一页时每 4 s 翻页，状态栏显示 `P n/m` |
+| 状态栏 | `HH:MM` + 网络状态（WAIT/CONN/ONLN/RTRY/ERR/OFF）+ 页码，播报期间显示 `SPEAK` |
+| 回执 | `screen/{imei}/ack`，QoS 1，状态分 `displayed` / `done` / `restored` / `failed` |
+| 掉电恢复 | 最后一条消息写入 NVM，上电重绘，联网后补发 `restored` |
+| TTS 播报 | ES8311 + I2S0，16 kHz 单声道；播报正文，完成后回执 `done`；新消息可打断旧播报 |
+| 等级灯效 | WS2812B ×3：`level=1` 绿色常亮、`level=2` 蓝色常亮、`level=3` 红色闪烁 |
+| 中文显示 | GB2312 一级 3755 个汉字的 16×16 点阵，脚本自动生成 |
 
-OPENSDK can be divided into three layers in terms of design: Base Package Layer, System Layer, and User Layer.
+## 2. 硬件与外设
+
+| 外设 | 接口 | 引脚 / 地址 | 备注 |
+|---|---|---|---|
+| OLED SSD1306 128×64 | I2C1 | 0x3C；SCL=模组脚 66(func2)，SDA=脚 57(func3) | 无背光、无复位脚，需自建帧缓冲 |
+| 三色灯 WS2812B ×3 | SPI0 | SCLK=86、SSN=83、MOSI=85、MISO=84（复用功能 1） | 5 MHz，1 个 SPI 字节表示 1 位；需 GPIO25 拉高使能 LDO |
+| 音频 ES8311 | I2C0 + I2S0 | I2C0=38/39；PA 使能 GPIO11 | 16 kHz、单声道右声道、16 bit |
+| 按键 KEY0/1/2 | GPIO | 20 / 22 / WAKEUPAD_0 | 本项目暂未使用 |
+
+> SPI0 显式指定到 85/83/84/86，是为了避开 I2C1 的引脚 66；配置见
+> [iodriver.ini](examples/NT26FxDx_OpenKit/iodriver.ini) 的 `[spi]` 段。
+
+## 3. 工程结构
 
 ```text
-+----------------------------------------------------------------+
-| [User Layer]   app        demo        ai        ...            |
-+----------------------------------------------------------------+
-|      stdlibC API | EC API | LIOT API | ThreadPart API          |
-+----------------------------------------------------------------+
-| [System Layer]                                                 |
-|  +-------------------------+  +----------------------------+   |
-|  | TTS  | OTA  | Driver    |  |        ThirdParty           |  |
-|  +------+------+-----------+  |   lwip        CJSON         |  |
-|  | SECBOOT     | PRECFG    |  |   Freertos    websocket     |  |
-|  +-------------+-----------+  |   lvgl        mbedtls       |  |
-|  | LIOTAPI .h  | ECAPI .h  |  |   ...                       |  |
-|  +-------------+-----------+  +-----------------------------+  |
-+----------------------------------------------------------------+
-| [Base Package Layer]                                           |
-|  +--------+------------+------+------+--------------+          |
-|  | PortLib| bootloader |  AP  |  CP  | ELF Parser   |          |
-|  +--------+------------+------+------+--------------+          |
-|  |     LogLib          |    MemoryMap               |          |
-|  +---------------------+----------------------------+          |
-|                                                                |
-+----------------------------------------------------------------+
-| [Module]  NT26FCNB60WNA   NT26K2B1   NT26F6D0   ...            |
-+----------------------------------------------------------------+
+CAT1.bis_OpenCPU/
+├── README.md                    本文件（项目说明）
+├── README_LIERDA.md             上游 SDK 说明（英文，原 README.md）
+├── README_LIERDA_ZH.md          上游 SDK 说明（中文，原 README_ZH.md）
+├── components/  rules/  tools/  SDK 内核、底包、工具链（未改动）
+└── examples/NT26FxDx_OpenKit/
+    ├── config                   构建开关：DEMO_NAME、TTS 资源、代码区调整
+    ├── iodriver.ini             引脚复用表（I2C / SPI / I2S …）
+    ├── Makefile                 工程构建入口，新增 demo_screen 分支
+    └── demo/src/demo_screen/
+        ├── inc/
+        │   ├── screen_config.h  全部可调参数：服务器、学号、引脚、音量、周期
+        │   ├── screen_types.h   事件类型与事件体（跨任务通信）
+        │   ├── screen_app.h     应用入口与事件投递
+        │   ├── screen_proto.h   JSON 组包/解析 + 0xAA 心跳帧
+        │   ├── screen_mqtt.h    MQTT 连接、订阅、发布、重连
+        │   ├── screen_oled.h    SSD1306 帧缓冲与绘制
+        │   ├── screen_font.h    字模接口（ASCII 8×16 + 汉字 16×16）
+        │   ├── screen_text.h    UTF-8 解码与按像素宽度折行
+        │   ├── screen_tts.h     TTS 播报接口
+        │   ├── screen_store.h   最后一条消息的掉电存储
+        │   └── screen_led.h     三色灯接口
+        ├── src/
+        │   ├── user_main.c      程序入口
+        │   ├── screen_app.c     主任务：状态机、渲染、回执、播报调度
+        │   ├── screen_mqtt.c    网络任务：拨号、连接、注册、心跳、重连
+        │   ├── screen_proto.c   协议编解码
+        │   ├── screen_oled.c    OLED 驱动封装与图元绘制
+        │   ├── screen_font.c    ASCII 点阵 + 汉字二分查表
+        │   ├── screen_font_cjk.c 汉字点阵表（自动生成，勿手改）
+        │   ├── screen_text.c    排版与折行
+        │   ├── screen_tts.c     播报任务（TTS 引擎 + 音频播放）
+        │   ├── screen_store.c   NVM 持久化
+        │   └── screen_led.c     WS2812B 灯效
+        └── tools/
+            └── gen_cjk_font.ps1 汉字点阵生成脚本
 ```
 
-1. **Base Package Layer**: The base package layer is not visible to users and is maintained by Lierda. Library files for different module models are packaged and placed in the `components/basePkg/` directory. The base package provides the most fundamental build environment for code execution, integrating the APIs and library files required by the SDK. The SDK is developed based on the APIs exposed by the base package.
+### 任务与队列
 
-2. **System Layer**: The core code that runs the SDK. After power-on, the system first completes base package and kernel initialization, then loads system layer components, starting execution from `components/kernel/core/main.c:main()`. The system layer adopts a modular design including kernel, configuration, drivers, open-source third-party libraries, TTS, OTA upgrade, etc. All modules except Kernel and configuration can be flexibly trimmed.
+| 任务 | 栈 | 职责 |
+|---|---|---|
+| app 主任务 | 10 KB | 唯一状态拥有者：解析、状态机、渲染、回执、持久化 |
+| mqtt 任务 | 8 KB | 拨号、连接、订阅、发布、心跳、重连 |
+| tts 任务 | 10 KB | 音频初始化与同步播报（`liot_tts_start` 阻塞） |
+| 1 s 定时器 | — | 只向队列投递 tick：刷新状态栏、翻页、闪烁 |
 
-3. **User Layer**: The area provided for developers to write their code. The system layer `Main()` function creates an independent thread of 10K size that calls the code entry point `void user_main(void)`. User business code typically starts execution from this entry point. Code is mainly located in the `examples` directory. Lierda provides two preset projects for developers. The `app` project is an empty project with no specific functionality — users can develop their own code based on it. The `demo` project is an API interface example demo provided by Lierda for customers as a reference.
+MQTT 回调与定时器回调只做数据拷贝/入队，不做解析、不刷屏、不播报。
 
-# 3 Directory Structure
+## 4. 通信协议
 
-```text
-──
-├── components                  (Component library, core code is placed here)
-│   ├── basePkg                 (Base package directory, generated by Lierda for different models)
-│   │   └── F6B_A, F7B_A, F6D_A, K2B_A, ...
-│   ├── driver                  (Open low-level drivers)
-│   │   └── lcd, camera, ...
-│   ├── kernel
-│   │   ├── app.ld              (Linker script)
-│   │   ├── core                (System startup entry)
-│   │   ├── ecapi               (Header files for Eigencomm platform APIs)
-│   │   ├── include             (General header file directory)
-│   │   └── lierda_api          (Header files for Lierda APIs)
-│   ├── ota                     (FOTA related code)
-│   ├── precfg                  (Preset config, parameterized by config/default.ini and iodriver.ini)
-│   ├── secboot                 (Secure boot verification related code)
-│   ├── thirdparty              (Open-source third-party source code)
-│   │   └── CJSON, freertos, websockets, lwip, mbedtls, etc.
-│   └── tts                     (TTS related code)
-├── config
-│   ├── default.ini             (Preset config: default UART AT port, default CID, APN, etc.)
-│   └── iodriver.ini            (IO pin config presets for UART/SPI/I2S/I2C/CAN drivers)
-├── docs                        (Related documentation)
-├── examples
-│   ├── app                     (Default project, no actual functionality, add customer code here)
-│   └── demo                    (Default demo project, provides API interface examples)
-├── LICENSE                     (Open-source code license)
-├── build.bat                   (Build entry for Windows)
-├── Makefile                    (Makefile build entry, can compile directly on Linux)
-├── README_EN.md                (English README file)
-├── README.md                   (Chinese README file)
-├── rules                       (Makefile build rules)
-│   └── Makefile, Makefile.defs, Makefile.modem, Makefile.rules, Makefile.tools, Makefile.vars
-└── tools                       (Scripts and tools)
-    └── 7z, appota, fcelf, lfsutil, msys64, precfg, secboot, toolchain
+| 主题 | 方向 | 说明 |
+|---|---|---|
+| `screen/{imei}/msg` | 下行 | 屏幕消息（JSON） |
+| `screen/{imei}/ack` | 上行 | 回执（JSON） |
+| `device/{imei}/up` | 上行 | 注册等 JSON 报文 |
+| `device/{imei}/upb` | 上行 | 0xAA 二进制心跳 |
+
+下行消息示例：
+
+```json
+{"type":"screen.msg","msgId":"M-0001","title":"通知","content":"今天下午三点开会",
+ "level":2,"tts":1,"ts":1764150000}
 ```
 
-# 4 Supported Models
+回执示例：
 
-Module models can be identified by the silkscreen on the module shielding cover. Base packages are split into different versions based on chip and functionality.
-
-| Base Package Version | Chip Description | **FLASH** | **RAM** | **File System** | Compatible Module Models |
-| --- | --- | --- | --- | --- | --- |
-| F6B_A | EC718PM B Series | 812 KB | 1 MB | 780 KB | NT26FCNB30WNA / NT26FCNB60WNA |
-| F6D_A | EC718PM D Series | 812 KB | 1 MB | 780 KB | NT26F6D0 (all series) / NT26F7D0 |
-| F7B_A | EC718PM B Series VoLTE | 452 KB | 1 MB | 168 KB | NT26FCNB70WNA |
-| K2B_A | EC716E B Series | 844 KB | 512 KB | 840 KB | NT26K2B1 / NT26K2B3 |
-| K2E_A | EC716E E Series | 844 KB | 512 KB | 840 KB | NT26K2E0 |
-| K2F_A | EC716E F Series | 844 KB | 512 KB | 840 KB | NT26KCNF20NNA |
-| F6E_A | EC718PM F Series | 844 KB | 512 KB | 840 KB | NT26F6E0 (under development) |
-| F6C_A | EC718PM F Series | 812 KB | 1 MB | 780 KB | NT26F6C0 |
-
-# 5 Peripheral Resources
-
-| Peripheral | K2B_A | F6B/F6D/F7B |
-| --- | --- | --- |
-| **UART** | 3 channels | 4 channels |
-| | Baud rate: 4.9Kbps, 9.6Kbps, 115.2Kbps, 921.6Kbps, up to 3 Mbps<br>Data bits: 5~8 bits<br>Parity: None, Odd, Even<br>Stop bits: 1, 2<br>Flow control supported<br>UART1 supports LPUART | |
-| **GPIO** | 21 channels | 39 channels |
-| | Includes 9 AONGPIO channels<br>Level: Default 1.8V, software adjustable range: 1.65V~3.30V<br>Configuration mode: Input, Output<br>Interrupt trigger: Low level, High level, Rising edge, Falling edge<br>Internal pull-up/pull-down: Supported on some IOs | |
-| **I2C** | Mode: Supports Master and Slave modes<br>Speed: 100 KHz~1 MHz<br>Addressing: Supports 7/10-bit addressing | |
-| **SPI** | 1 channel | 2 channels |
-| | Mode: Supports Master and Slave modes<br>Speed: Up to 25.6 MHz<br>Data width: 8-bit, 16-bit | |
-| **USP** | 1 channel | 3 channels |
-| | Quantity: 3 channels (I2S/CSPI/LSPI)<br>Mode: Supports Master and Slave modes<br>Supports 8~96k, 16 or 24-bit, 8~48k, 32-bit<br>Supports standard I2S/LJ/RJ mode, PCM mode A/B<br>I2S/PCM supports TXRX/TX/RX<br>CSPI supports slave reception<br>USP0/USP1 have hardware acceleration<br>Newly supports QSPI and 8080 interface (only 718(P_M/P_VM) series) | |
-| **USB** | Supports USB 2.0<br>Supports 480Mbps (HS), 12Mbps (FS) data transfer<br>Supports device mode | |
-| **ADC** | 2 channels | 4 channels |
-| | Analog channels: 4, input range: 0V~3.4V<br>Temperature sensor: 1 channel, input range: -40°C~85°C<br>VBAT voltage: 1 channel, input range: 2.7V~4.5V<br>Resolution: 12-bit AUXADC | |
-| **Timer** | Quantity: Supports 6 hardware timers | |
-| **PWM** | Quantity: Supports 6 channels | |
-| **Low-power Timer** | Quantity: Supports 7 | |
-| **WAKEUP** | Quantity: Supports 6 low-power wake-up sources | |
-| **CAN** | Not supported | Not supported |
-
-# 6 Quick Development
-
-Below is a quick development guide. For more detailed development reference, see ["Quick Start Guide"](https://opendocs.lierda.com/docs/CAT.1_Doc_Protal/en/general/quick_start.html).
-
-## 6.1 Get Module Model and Confirm Build Project
-
-- Check the module model on the module silkscreen.
-- Project names are under the `examples/` directory, where the directory name corresponds to the project name, e.g., `examples/demo` -> `demo` project.
-
-## 6.2 Build
-
-The SDK supports both Windows and Linux development.
-On Windows you can use the lierda_upgrade_tool or Makefile to build. Choose the method that suits your situation. For details, refer to: ["Lierda Cellular Firmware Flashing Tool User Guide"](https://opendocs.lierda.com/docs/CAT.1_Doc_Protal/en/tools/flash/flash-tool.html)
-
-Below is the main introduction to command-line building from the SDK root directory:
-
-**6.2.1 Linux Build**
-
-Linux recommended system: Ubuntu 20.04 or above. Make, Python3, and 32-bit runtime environment need to be installed.
-
-```bash
-sudo apt update
-sudo apt install -y make
-sudo apt install -y lib32z1 lib32stdc++6
-sudo apt install -y python3.10 python3.10-dev python3.10-distutils
+```json
+{"type":"screen.ack","msgId":"M-0001","status":"displayed","shown":true}
 ```
 
-```bash
-# Enter SDK directory
-cd CAT1.bis_OpenCPU
-# Incremental build, unchanged files are not recompiled
-make
-# Clean build, cleans examples then recompiles
-make all
-# Build with parameters: clean build + specify demo project + use F6D_A base package
-make all PROJECT=demo MODEM=NT26F6D0 MODEMPKG=F6D_A
+心跳帧（9 + N 字节）：`0xAA | IMEI 倒数第2位 | IMEI 最后1位 | 0x01 | seq | len | RSSI(int8) | uptime(4) | sent(2) | ok(2) | RFU | XOR | 0x0F`。
+
+## 5. 构建与烧录
+
+```powershell
+build.bat all PROJECT=NT26FxDx_OpenKit MODEM=NT26F6D0 MODEMPKG=F6D_A
 ```
 
-**6.2.2 Windows Build**
+USB boot 模式下整包烧录：
 
-```bash
-# Enter SDK directory
-cd CAT1.bis_OpenCPU
-# Incremental build, unchanged files are not recompiled
-./build.bat
-# Clean build, cleans examples then recompiles
-./build.bat all
-# Build with parameters: clean build + specify demo project + use F6D_A base package
-./build.bat all PROJECT=demo MODEM=NT26F6D0 MODEMPKG=F6D_A
+```powershell
+make burn pkg=gccout/NT26FxDx_OpenKit/NT26FxDx_OpenKit.binpkg type=full mode=usb
 ```
 
-## 6.3 Generated Files
+**注意：改动 flash 分区、TTS 资源或字库后必须整包烧录。** TTS 资源不在 app 分区里，
+只烧 `type=app` 会得到擦除态（串口打印 `head=FFFFFFFF`，TTS 被禁用）。
 
-Generated files are located in the **gccout/project_name** directory under the root. Taking the demo project + module NT26F6D0 as an example, in the **gccout/demo/** directory:
+## 6. 关键配置
 
-- `demo_NT26F6D0_01.binpkg`: Combined package of base package + application layer.
-- `demo_NT26F6D0.bin`: Package containing only the application layer.
-- `F6D_A_base.binpkg`: Combined package containing only the base package without the application.
+全部集中在 [screen_config.h](examples/NT26FxDx_OpenKit/demo/src/demo_screen/inc/screen_config.h)：
 
-## 6.4 Flashing
+| 宏 | 默认值 | 说明 |
+|---|---|---|
+| `SCREEN_STUDENT_NO` | `23040722` | 学号，同时作为 MQTT clientId，必须全局唯一 |
+| `SCREEN_SERVER_HOST` / `PORT` | `49.235.147.4` / `1883` | 课程 MQTT broker |
+| `SCREEN_TTS_VOLUME` / `SCREEN_TTS_CODEC_VOLUME` | 60 / 60 | 软件音量与 ES8311 硬件音量，任一为 0 即静音 |
+| `SCREEN_LED_BRIGHTNESS` | 128 | 三色灯总亮度 0–255 |
+| `SCREEN_TICK_PERIOD_MS` | 1000 | 主循环 tick |
+| `SCREEN_LED_BLINK_INTERVAL_MS` | 500 | 紧急等级闪烁半周期 |
 
-We use the lierda_upgrade_tool for flashing. For tool usage documentation, refer to:
+flash 分区在 [Makefile](examples/NT26FxDx_OpenKit/Makefile) 的 `demo_screen` 分支：
 
-["Lierda Cellular Firmware Flashing Tool User Guide"](https://opendocs.lierda.com/docs/CAT.1_Doc_Protal/en/tools/flash/flash-tool.html)
+| 项 | 值 |
+|---|---|
+| 代码区 | `0x9C000`（624 KB，`CODE_REGION_ADJUST=0x68000`） |
+| TTS 资源 | `16k_zh`，约 604 KB，地址 `0x2F2000` |
+| 内部 FS | 约 360 KB（`NVM` 持久化只占几 KB） |
 
-## 6.5 Viewing Logs
+## 7. 中文字库
 
-Open any serial port tool, select baud rate 115200, open the serial port, and you can view the APP logs.
+- 字库覆盖 **GB2312 一级 3755 个汉字**，16×16 点阵，共 120 KB，全部 `const` 存放于 flash，不占 RAM。
+- 数据由 [gen_cjk_font.ps1](examples/NT26FxDx_OpenKit/demo/src/demo_screen/tools/gen_cjk_font.ps1) 从系统宋体批量生成，无需手工取模：
 
-For more log details, refer to: ["Windows Log Capture Guide"](https://opendocs.lierda.com/docs/CAT.1_Doc_Protal/en/tools/Packet%20capture/packet-capture.html)
-
-# 7 Documentation
-
-[General Guide](https://opendocs.lierda.com/docs/CAT.1_Doc_Protal/en/general/index.html) | [Hardware](https://opendocs.lierda.com/docs/CAT.1_Doc_Protal/en/hardware/index.html) | [Software Development](https://opendocs.lierda.com/docs/CAT.1_Doc_Protal/en/software/index.html) | [Tools](https://opendocs.lierda.com/docs/CAT.1_Doc_Protal/en/tools/index.html)
-
-# 8 More Development Examples
-
-["Based on L-CT4IT00-YP00W-01_V04 Hardware"](https://opendocs.lierda.com/docs/CAT.1_Doc_Protal/en/examples/L-CT4IT00-YP00W-01_V04/L-CT4IT00-YP00W-01_V04_quick_start.html)
-
-["Lierda XiaoDa Application Guide"](https://opendocs.lierda.com/docs/CAT.1_Doc_Protal/en/examples/XiaoDa/XiaoDa%20Application%20Guide_Rev0.1.html)
-
-# 9 Tools
-
-- ["USB Driver Installation Guide"](https://opendocs.lierda.com/docs/CAT.1_Doc_Protal/en/tools/usb/USB_Driver_Installation_Guide.html)
-
-# 10 License
-
-71x OPENSDK follows the Apache License 2.0 open-source license. It can be used freely in commercial products without the need to disclose private code, with no potential commercial risk.
-
-```c
-/*
- * Copyright (c) Lierda Science & Technology Group Co., Ltd.
- *
- * SPDX-License-Identifier: Apache-2.0
- */
+```powershell
+cd examples\NT26FxDx_OpenKit\demo\src\demo_screen\tools
+powershell -ExecutionPolicy Bypass -File gen_cjk_font.ps1
 ```
+
+- 可选参数：`-PixelSize 16`（字号）、`-Dy`（垂直微调）、`-MaxChars N`（只生成前 N 字，调试用）。
+- 修改范围（例如扩展到二级字库）后重新生成即可，绘制与查表代码无需改动。
+
+## 8. 已知限制
+
+1. 汉字只覆盖一级字库，二级生僻字（部分人名、地名用字）会显示为方框占位。
+2. 代码区借用了内部文件系统空间，FS 由约 524 KB 降到约 360 KB；本项目持久化使用 NVM，不依赖 FS。
+3. 修改 `CODE_REGION_ADJUST`、TTS 资源或字库后，必须整包烧录，否则 TTS 资源区为空。
+4. 心跳为 30 s 周期，服务器侧离线判定时间需大于该值。
+
+## 9. 与上游 SDK 的差异
+
+| 类型 | 路径 |
+|---|---|
+| 新增 | `examples/NT26FxDx_OpenKit/demo/src/demo_screen/**` |
+| 修改 | `examples/NT26FxDx_OpenKit/Makefile`（新增 `demo_screen` 分支、TTS、代码区调整） |
+| 修改 | `examples/NT26FxDx_OpenKit/config`（默认 `DEMO_NAME=demo_screen`） |
+| 修改 | `examples/NT26FxDx_OpenKit/iodriver.ini`（SPI0 显式引脚） |
+| 重命名 | `README.md` → `README_LIERDA.md`；`README_ZH.md` → `README_LIERDA_ZH.md` |
+| 未改动 | `components/`、`rules/`、`tools/` 等 SDK 内核、底包与工具链 |
+
+## 10. 许可
+
+本项目继承上游 SDK 的 **Apache License 2.0**（见 [LICENSE](LICENSE)）。

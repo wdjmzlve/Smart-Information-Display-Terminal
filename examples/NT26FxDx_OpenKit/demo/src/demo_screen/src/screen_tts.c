@@ -139,9 +139,10 @@ static void screen_tts_audio_evt_cb(Liot_AudEvent_e event, void *context)
  */
 static int screen_tts_hw_init(void)
 {
-    Liot_AudHwConfig_t cfg;
-    Liot_AudErr_e      aud_ret;
-    uint8_t            res_head[4] = {0};
+    Liot_AudHwConfig_t  cfg;
+    Liot_AudErr_e       aud_ret;
+    liot_tts_errcode_e  tts_ret;
+    uint8_t             res_head[4] = {0};
 
     /* 等 LDO 与 ES8311 上电稳定，与官方音频 demo 保持一致 */
     liot_rtos_task_sleep_ms(SCREEN_TTS_POWER_ON_DELAY_MS);
@@ -202,11 +203,19 @@ static int screen_tts_hw_init(void)
                (unsigned)PKGFLXTTS_RES_ADDR, (unsigned)PKGFLXTTS_RES_SIZE,
                res_head[0], res_head[1], res_head[2], res_head[3]);
 
+    /* 全 FF 表示该区域是擦除态：烧录包里没带 TTS 资源，必须整包烧录 */
+    if ((res_head[0] == 0xFFU) && (res_head[1] == 0xFFU) &&
+        (res_head[2] == 0xFFU) && (res_head[3] == 0xFFU))
+    {
+        liot_trace("[TTS] resource empty, flash with type=full");
+    }
+
     liot_tts_set_resource((void *)PKGFLXTTS_RES_ADDR, screen_tts_read_res_cb);
 
-    if (liot_tts_engine_init(screen_tts_output_cb) != LIOT_TTS_SUCCESS)
+    tts_ret = liot_tts_engine_init(screen_tts_output_cb);
+    if (tts_ret != LIOT_TTS_SUCCESS)
     {
-        liot_trace("[TTS] engine init failed");
+        liot_trace("[TTS] engine init failed ret=%d", (int)tts_ret);
         return -1;
     }
 

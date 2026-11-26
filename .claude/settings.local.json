@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l app/src/*.c inc/*.h demo/inc/*.h demo/src/*.c demo/src/demo_3a/*.c demo/src/demo_zhongyi_ai/src/*.c demo/src/demo_zhongyi_ai/inc/*.h)",
+      "Bash(xargs grep -ln \"liot_cust_nvm_fwrite\")"
+    ]
+  }
+}

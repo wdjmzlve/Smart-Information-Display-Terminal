@@ -75,6 +75,21 @@ else ifeq ($(DEMO_NAME), demo_3a)
 
 include $(TOP)/$(CUSTOM_DIR)/demo/src/demo_3a/Makefile
 
+else ifeq ($(DEMO_NAME), demo_screen)
+
+CUSTOM_SRC := $(CUSTOM_DIR)/demo/src/demo_screen/src
+CUSTOM_INC := $(CUSTOM_DIR)/demo/src/demo_screen/inc
+CFLAGS_INC += -I $(TOP)/$(CUSTOM_INC)
+CUSTOM_COBJSTEMP := $(patsubst $(TOP)/%.c,%.o,$(wildcard $(TOP)/$(CUSTOM_SRC)/*.c))
+PP_FILES += $(wildcard $(TOP)/$(CUSTOM_SRC)/*.c)
+
+# 本工程外设：骨架阶段只开 OLED，WS2812B 待引脚确认后再开
+BUILD_DRIVER_LCD_EN := y
+
+# Stage 6 再打开 TTS，避免前期编译变慢、镜像变大
+# BUILD_COMP_TTS_EN   := y
+# TTS_RESOURCE_TYPE   ?= 16k_zh
+
 else ifeq ($(DEMO_NAME), demo_watch)
 
 include $(TOP)/$(CUSTOM_DIR)/demo/src/demo_watch/Makefile

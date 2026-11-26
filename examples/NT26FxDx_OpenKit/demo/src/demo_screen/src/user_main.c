@@ -14,7 +14,6 @@
 #include "liot_os.h"
 
 #include "screen_app.h"
-#include "screen_led.h"
 
 /**
  * @brief 用户任务入口
@@ -24,11 +23,7 @@ void user_main(void)
 {
     liot_trace("==== SCREEN_APP demo ====");
 
-    if (screen_led_init() != 0)
-    {
-        liot_trace("[APP] led init failed, continue without led");
-    }
-
+    /* 灯效由 screen_app_init() 统一初始化，这里不再重复调用，避免 SPI 被重复初始化 */
     if (screen_app_init() != 0)
     {
         liot_trace("[APP] init failed, halt");

@@ -422,6 +422,12 @@ int screen_app_init(void)
         return -1;
     }
 
+    /* 灯效独立于显示：先初始化，掉电恢复时才能立刻还原等级颜色 */
+    if (screen_led_init() != 0)
+    {
+        liot_trace("[APP] led init failed, effects disabled");
+    }
+
     if (screen_oled_init() == 0)
     {
         s_app_ctx.oled_ready = 1U;
@@ -436,6 +442,7 @@ int screen_app_init(void)
                 SCREEN_MAX_LINES, SCREEN_OLED_WIDTH);
             s_app_ctx.page_index = 0U;
             s_app_ctx.page_elapsed_ms = 0U;
+            screen_led_set_level((screen_level_e)s_app_ctx.last_msg.level);
             liot_trace("[APP] restored msgId=%s", s_app_ctx.last_msg.msg_id);
         }
 
@@ -650,6 +657,9 @@ static void screen_app_handle_downlink(const screen_event_t *event)
     {
         liot_trace("[APP] store save failed");
     }
+
+    /* 灯效跟随消息等级：普通绿、提醒蓝、紧急红闪 */
+    screen_led_set_level((screen_level_e)s_rx_msg.level);
 
     /* 新消息立即上屏，不等下一次 tick */
     screen_app_render();

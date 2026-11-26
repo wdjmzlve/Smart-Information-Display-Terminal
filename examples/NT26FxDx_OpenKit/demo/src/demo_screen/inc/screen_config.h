@@ -124,6 +124,23 @@
 #define SCREEN_TTS_AUDIO_I2S_NUM    (0)             /* 音频走 I2S0 */
 #define SCREEN_TTS_AUDIO_PA_GPIO    (11)            /* 功放使能 GPIO */
 
+/* ------------------------------ 三色灯 WS2812B ------------------------------ */
+#define SCREEN_LED_COUNT            (3U)            /* 板载 WS2812B 灯珠数量 */
+#define SCREEN_LED_SPI_PORT         (0U)            /* 三色灯挂在 SPI0 */
+#define SCREEN_LED_SPI_CLK_HZ       (5000000U)      /* 与官方 demo_ws2812b.c 一致，1 个 SPI 字节表示 1 位 */
+#define SCREEN_LED_BRIGHTNESS       (128U)          /* 全局亮度 0-255，兼顾白天可见与夜间不刺眼 */
+#define SCREEN_LED_BLINK_INTERVAL_MS (500U)         /* 紧急等级红闪的半周期 */
+#define SCREEN_LED_RGB_NORMAL_R     (0U)            /* 普通：绿 */
+#define SCREEN_LED_RGB_NORMAL_G     (160U)
+#define SCREEN_LED_RGB_NORMAL_B     (0U)
+#define SCREEN_LED_RGB_NOTICE_R     (0U)            /* 提醒：蓝 */
+#define SCREEN_LED_RGB_NOTICE_G     (0U)
+#define SCREEN_LED_RGB_NOTICE_B     (200U)
+#define SCREEN_LED_RGB_URGENT_R     (220U)          /* 紧急：红 */
+#define SCREEN_LED_RGB_URGENT_G     (0U)
+#define SCREEN_LED_RGB_URGENT_B     (0U)
+/* SPI0 引脚不在代码里设置：由 iodriver.ini 生成，SPI 驱动初始化时统一配置 */
+
 /* ------------------------------ 时间换算 ------------------------------ */
 #define SCREEN_SECONDS_PER_MINUTE   (60U)           /* 每小时秒数换算系数 */
 #define SCREEN_MINUTES_PER_HOUR     (60U)           /* 每小时分钟数 */

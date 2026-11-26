@@ -27,12 +27,13 @@ BUILD_THPART_OPUS_ENABLE = y
 # Setting 'n' excludes the module from compilation entirely.
 # This prevents an unstable module from affecting the rest of the system.
 ##############################################################################
-HWDEMO_KEY_EN          ?= y
+HWDEMO_KEY_EN          ?= n
 HWDEMO_LCD_SSD1306_EN  ?= n
 HWDEMO_LCD_EN          ?= n
 HWDEMO_CAMERA_EN       ?= n
 HWDEMO_TP_EN           ?= n
 HWDEMO_SOUND_EN        ?= n
-# I2C1 (TP/SSD1306) and SPI0 (WS2812B) share Pin 66, can't open together
-HWDEMO_WS2812B_EN      ?= n
-HWDEMO_TCP_EN          ?= y
+# I2C1 (TP/SSD1306) and SPI0 defaults share module pin 66; iodriver.ini now
+# remaps SPI0 to 86/83/85/84 so the OLED and WS2812B can run together
+HWDEMO_WS2812B_EN      ?= y
+HWDEMO_TCP_EN          ?= n

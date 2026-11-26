@@ -83,7 +83,8 @@ CFLAGS_INC += -I $(TOP)/$(CUSTOM_INC)
 CUSTOM_COBJSTEMP := $(patsubst $(TOP)/%.c,%.o,$(wildcard $(TOP)/$(CUSTOM_SRC)/*.c))
 PP_FILES += $(wildcard $(TOP)/$(CUSTOM_SRC)/*.c)
 
-# 本工程外设：OLED 常开；WS2812B 待引脚确认后再开
+# 本工程外设：OLED 走 I2C1，WS2812B 走 SPI0（引脚见 iodriver.ini）
+# 灯效直接按官方 demo 的方式打包发送，不依赖 ws2812b 驱动组件
 BUILD_DRIVER_LCD_EN := y
 
 # TTS：资源和库会占用 APP 区，采样率必须与音频配置保持一致

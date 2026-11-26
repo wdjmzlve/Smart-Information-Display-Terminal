@@ -145,6 +145,7 @@ static int screen_tts_hw_init(void)
 
     /* 等 LDO 与 ES8311 上电稳定，与官方音频 demo 保持一致 */
     liot_rtos_task_sleep_ms(SCREEN_TTS_POWER_ON_DELAY_MS);
+    liot_trace("[TTS] audio init begin");
 
     if (Liot_AonPowerCtl(true) != L_GPIO_ERR_SUCCESS)
     {
@@ -270,6 +271,9 @@ static void screen_tts_task(void *arg)
     uint8_t          ok;
 
     (void)arg;
+
+    /* 任务启动即打印，便于区分“任务没起来”和“卡在音频初始化里” */
+    liot_trace("[TTS] task start");
 
     if (screen_tts_hw_init() == 0)
     {

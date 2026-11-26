@@ -2,8 +2,8 @@
  * @file screen_led.h
  * @brief 三色灯（WS2812B）接口
  *
- * 骨架阶段不驱动硬件：I2C1 与 SPI0 共用模块引脚 66，
- * 先保证 OLED 通路可用，Stage 7 再补灯效实现。
+ * 三色灯接在 SPI0，默认映射会占用模块引脚 66（与 OLED 的 I2C1 SCL 冲突），
+ * 因此在 iodriver.ini 中把 SPI0 改到 86/83/85/84，见该文件 [spi] 段。
  *
  * @copyright Copyright (c) 2025 Lierda Technology Co., Ltd.
  * @date 2025-11-25

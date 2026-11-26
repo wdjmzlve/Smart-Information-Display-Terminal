@@ -2,14 +2,14 @@
  * @file screen_app.c
  * @brief 云播报屏应用主任务与事件分发
  *
- * Stage 4 职责：
- *   1. 把最近一条 screen.msg 渲染到三区界面；
- *   2. 标题栏显示 title，内容区按 128 像素折行，每页 2 行自动翻页；
- *   3. 状态栏显示时间、网络状态与页码。
+ * Stage 5 职责：
+ *   1. 显示成功/重复下发/掉电恢复时向服务器回执 screen.ack；
+ *   2. 新消息先写入 NVM，重启后恢复最后内容；
+ *   3. 恢复的消息等 MQTT 上线后再回执 restored。
  *
  * @copyright Copyright (c) 2025 Lierda Technology Co., Ltd.
  * @date 2025-11-26
- * @version 1.4
+ * @version 1.5
  */
 
 #include <stdio.h>
@@ -25,6 +25,7 @@
 #include "screen_mqtt.h"
 #include "screen_oled.h"
 #include "screen_proto.h"
+#include "screen_store.h"
 #include "screen_text.h"
 
 /* 未收到消息时的演示文本 */
@@ -50,6 +51,9 @@ typedef struct
     uint8_t      has_msg;       /*!< 是否已收到有效消息 */
     uint8_t      line_count;    /*!< 正文折行后的行数 */
     uint8_t      page_index;    /*!< 当前页号，从 0 开始 */
+    uint8_t      mqtt_online;   /*!< 上一轮是否已在线，用于检测上线沿 */
+    uint8_t      restore_pending;   /*!< 有待补发的 restored 回执 */
+    uint8_t      last_ack_done;     /*!< 上次回执是否已是 done */
     uint32_t     page_elapsed_ms;                           /*!< 当前页已显示时长 */
     screen_msg_t last_msg;                                  /*!< 最近一条有效消息 */
     char         content_lines[SCREEN_MAX_LINES][SCREEN_LINE_MAX_BYTES]; /*!< 折行结果 */
@@ -280,6 +284,61 @@ static void screen_app_render(void)
 }
 
 /**
+ * @brief 发送回执（只入队，实际发布在 MQTT 任务中）
+ * @param[in] status displayed / done / restored / failed
+ * @param[in] shown  内容是否已显示
+ * @param[in] err    失败原因，可为 NULL
+ * @return 无
+ */
+static void screen_app_send_ack(const char *status, uint8_t shown,
+                                const char *err)
+{
+    if ((s_app_ctx.has_msg == 0U) || (status == NULL))
+    {
+        return;
+    }
+
+    if (screen_mqtt_send_ack(s_app_ctx.last_msg.msg_id, status, shown,
+                             err) != 0)
+    {
+        liot_trace("[APP] ack enqueue failed: %s", status);
+        return;
+    }
+
+    liot_trace("[APP] ack %s msgId=%s", status, s_app_ctx.last_msg.msg_id);
+}
+
+/**
+ * @brief 检测 MQTT 上线，并在上线后补发 restored 回执
+ * @return 无
+ */
+static void screen_app_check_online(void)
+{
+    uint8_t online;
+
+    online = (screen_mqtt_get_state() == SCREEN_MQTT_STATE_ONLINE) ? 1U : 0U;
+
+    if (online == 0U)
+    {
+        s_app_ctx.mqtt_online = 0U;
+        return;
+    }
+
+    if (s_app_ctx.mqtt_online != 0U)
+    {
+        return;
+    }
+
+    s_app_ctx.mqtt_online = 1U;
+
+    if ((s_app_ctx.restore_pending != 0U) && (s_app_ctx.has_msg != 0U))
+    {
+        screen_app_send_ack("restored", 1U, NULL);
+        s_app_ctx.restore_pending = 0U;
+    }
+}
+
+/**
  * @brief 初始化应用队列、周期定时器、OLED 与网络
  * @return 0 成功，-1 队列/定时器失败
  * @note 外设初始化失败不阻塞主循环，串口会打印错误，便于单独排查
@@ -317,6 +376,20 @@ int screen_app_init(void)
     if (screen_oled_init() == 0)
     {
         s_app_ctx.oled_ready = 1U;
+
+        /* 上电先恢复最后一条消息，等联网后再回执 restored */
+        if (screen_store_load(&s_app_ctx.last_msg) == 0)
+        {
+            s_app_ctx.has_msg = 1U;
+            s_app_ctx.restore_pending = 1U;
+            s_app_ctx.line_count = (uint8_t)screen_text_wrap(
+                s_app_ctx.last_msg.content, s_app_ctx.content_lines,
+                SCREEN_MAX_LINES, SCREEN_OLED_WIDTH);
+            s_app_ctx.page_index = 0U;
+            s_app_ctx.page_elapsed_ms = 0U;
+            liot_trace("[APP] restored msgId=%s", s_app_ctx.last_msg.msg_id);
+        }
+
         screen_app_render();
     }
     else
@@ -462,11 +535,23 @@ static void screen_app_handle_downlink(const screen_event_t *event)
             return;
     }
 
-    /* 同一 msgId 重复下发：不刷新、不重播，直接忽略 */
+    /* 同一 msgId 重复下发：不刷新、不重播，但仍要回执让服务器停止重发 */
     if ((s_app_ctx.has_msg != 0U) &&
         (strcmp(s_app_ctx.last_msg.msg_id, s_rx_msg.msg_id) == 0))
     {
         liot_trace("[APP] duplicate msgId=%s, ignored", s_rx_msg.msg_id);
+
+        if (s_app_ctx.restore_pending != 0U)
+        {
+            screen_app_send_ack("restored", 1U, NULL);
+            s_app_ctx.restore_pending = 0U;
+        }
+        else
+        {
+            screen_app_send_ack((s_app_ctx.last_ack_done != 0U) ? "done"
+                                                                : "displayed",
+                                1U, NULL);
+        }
         return;
     }
 
@@ -479,14 +564,32 @@ static void screen_app_handle_downlink(const screen_event_t *event)
     s_app_ctx.page_index = 0U;
     s_app_ctx.page_elapsed_ms = 0U;
 
+    s_app_ctx.restore_pending = 0U;
+    s_app_ctx.last_ack_done = 0U;
+
     liot_trace("[APP] rx msgId=%s level=%d tts=%d lines=%u",
                s_rx_msg.msg_id, s_rx_msg.level, s_rx_msg.tts,
                (unsigned)s_app_ctx.line_count);
     liot_trace("[APP] title=%s", s_rx_msg.title);
     liot_trace("[APP] content=%s", s_rx_msg.content);
 
+    /* 先落盘再回执：即使马上掉电，重启也能恢复这条消息 */
+    if (screen_store_save(&s_app_ctx.last_msg) != 0)
+    {
+        liot_trace("[APP] store save failed");
+    }
+
     /* 新消息立即上屏，不等下一次 tick */
     screen_app_render();
+
+    if (s_app_ctx.oled_ready == 0U)
+    {
+        screen_app_send_ack("failed", 0U, "display unavailable");
+    }
+    else
+    {
+        screen_app_send_ack("displayed", 1U, NULL);
+    }
 }
 
 /**
@@ -507,6 +610,7 @@ static void screen_app_handle_event(const screen_event_t *event)
             /* 只更新状态栏与页码，不打印日志，避免每秒刷屏 */
             s_app_ctx.tick_count++;
             screen_led_tick(event->tick_ms);
+            screen_app_check_online();
             screen_app_update_page(event->tick_ms);
             screen_app_render();
             break;

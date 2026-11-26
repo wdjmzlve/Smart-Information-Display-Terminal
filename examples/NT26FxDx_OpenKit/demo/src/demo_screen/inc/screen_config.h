@@ -83,6 +83,10 @@
 #define SCREEN_MSG_TTS_OFF              (0)         /* 不播报 */
 #define SCREEN_MSG_TTS_ON               (1)         /* 需要播报 */
 
+/* ------------------------------ 回执 ------------------------------ */
+#define SCREEN_ACK_STATUS_MAX_LEN       (12U)       /* displayed/done/restored/failed */
+#define SCREEN_ACK_ERR_MAX_LEN          (40U)       /* 失败原因缓冲区 */
+
 /* ------------------------------ 协议缓冲区 ------------------------------ */
 #define SCREEN_TOPIC_MAX_LEN            (64U)       /* topic 缓冲区 */
 #define SCREEN_URL_MAX_LEN              (64U)       /* mqtt://host:port 缓冲区 */

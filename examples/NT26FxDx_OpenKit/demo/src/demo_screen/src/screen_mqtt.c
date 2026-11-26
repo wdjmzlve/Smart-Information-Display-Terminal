@@ -33,12 +33,17 @@
 typedef enum
 {
     SCREEN_MQTT_EV_HB = 1,      /*!< 发送一次心跳 */
+    SCREEN_MQTT_EV_ACK,         /*!< 发送一条回执 */
     SCREEN_MQTT_EV_MAX
 } screen_mqtt_event_e;
 
 typedef struct
 {
-    int event;                  /*!< screen_mqtt_event_e */
+    int     event;          /*!< screen_mqtt_event_e */
+    uint8_t shown;          /*!< 回执 shown 字段 */
+    char    msg_id[SCREEN_MSG_ID_MAX_LEN];      /*!< 回执 msgId */
+    char    status[SCREEN_ACK_STATUS_MAX_LEN];  /*!< 回执状态 */
+    char    err[SCREEN_ACK_ERR_MAX_LEN];        /*!< 失败原因 */
 } screen_mqtt_msg_t;
 
 typedef struct
@@ -368,6 +373,45 @@ static void screen_mqtt_send_heartbeat(void)
 }
 
 /**
+ * @brief 发布一条 screen.ack
+ * @param[in] req 回执请求
+ * @return 无
+ * @note 只在 MQTT 任务中调用，保证发布串行
+ */
+static void screen_mqtt_publish_ack(const screen_mqtt_msg_t *req)
+{
+    char        json[SCREEN_JSON_MAX_LEN];
+    const char *err;
+    int         len;
+
+    if (req == NULL)
+    {
+        return;
+    }
+
+    err = (req->err[0] != '\0') ? req->err : NULL;
+
+    len = screen_proto_build_ack(s_mqtt_ctx.imei, req->msg_id, req->status,
+                                 req->shown, err, s_mqtt_ctx.seq, json,
+                                 sizeof(json));
+    if (len <= 0)
+    {
+        liot_trace("[MQTT] build ack failed: %s", req->status);
+        return;
+    }
+
+    if (screen_mqtt_publish(s_mqtt_ctx.topic_ack, json, (uint16_t)len,
+                            SCREEN_MQTT_QOS, 0U) != 0)
+    {
+        liot_trace("[MQTT] publish ack failed: %s", req->status);
+        return;
+    }
+
+    s_mqtt_ctx.seq++;
+    liot_trace("[MQTT] ack sent msgId=%s status=%s", req->msg_id, req->status);
+}
+
+/**
  * @brief 心跳定时器回调
  * @param[in] arg 未使用
  * @return 无
@@ -616,6 +660,10 @@ static void screen_mqtt_task(void *arg)
                 {
                     screen_mqtt_send_heartbeat();
                 }
+                else if (msg.event == SCREEN_MQTT_EV_ACK)
+                {
+                    screen_mqtt_publish_ack(&msg);
+                }
             }
 
             /* 轮询客户端状态，兜底捕捉底层断链 */
@@ -736,4 +784,42 @@ const char *screen_mqtt_state_text(void)
 void screen_mqtt_set_rx_handler(screen_mqtt_rx_handler_t handler)
 {
     s_mqtt_ctx.rx_handler = handler;
+}
+
+/**
+ * @brief 请求发送一条 screen.ack
+ * @param[in] msg_id 原样回带的消息 ID
+ * @param[in] status 回执状态
+ * @param[in] shown  内容是否已显示
+ * @param[in] err    失败原因，可为 NULL
+ * @return 0 已入队，-1 失败
+ */
+int screen_mqtt_send_ack(const char *msg_id, const char *status,
+                         uint8_t shown, const char *err)
+{
+    screen_mqtt_msg_t msg;
+
+    if ((msg_id == NULL) || (status == NULL) || (s_mqtt_ctx.queue == NULL))
+    {
+        return -1;
+    }
+
+    memset(&msg, 0, sizeof(msg));
+    msg.event = SCREEN_MQTT_EV_ACK;
+    msg.shown = shown;
+    (void)strncpy(msg.msg_id, msg_id, sizeof(msg.msg_id) - 1U);
+    (void)strncpy(msg.status, status, sizeof(msg.status) - 1U);
+    if (err != NULL)
+    {
+        (void)strncpy(msg.err, err, sizeof(msg.err) - 1U);
+    }
+
+    if (liot_rtos_queue_release(s_mqtt_ctx.queue, (uint32)sizeof(msg),
+                                (uint8 *)&msg, 0) != LIOT_OSI_SUCCESS)
+    {
+        liot_trace("[MQTT] ack queue full");
+        return -1;
+    }
+
+    return 0;
 }

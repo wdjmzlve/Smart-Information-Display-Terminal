@@ -205,6 +205,92 @@ int screen_proto_build_heartbeat(const char *imei, uint8_t seq,
 }
 
 /**
+ * @brief 组 screen.ack 回执 JSON
+ * @param[in]  imei     设备 IMEI
+ * @param[in]  msg_id   原样回带的消息 ID
+ * @param[in]  status   回执状态
+ * @param[in]  shown    内容是否已显示
+ * @param[in]  err      失败原因，可为 NULL
+ * @param[in]  seq      上行序号
+ * @param[out] buf      输出缓冲区
+ * @param[in]  buf_size 缓冲区长度
+ * @return 成功返回 JSON 长度，失败返回 -1
+ */
+int screen_proto_build_ack(const char *imei, const char *msg_id,
+                           const char *status, uint8_t shown,
+                           const char *err, uint8_t seq,
+                           char *buf, uint32_t buf_size)
+{
+    cJSON *root = NULL;
+    cJSON *data = NULL;
+    char  *text = NULL;
+    size_t text_len;
+    int    result = -1;
+
+    if ((imei == NULL) || (msg_id == NULL) || (status == NULL) ||
+        (buf == NULL))
+    {
+        return -1;
+    }
+
+    root = cJSON_CreateObject();
+    data = cJSON_CreateObject();
+    if ((root == NULL) || (data == NULL))
+    {
+        liot_trace("[PROTO] ack json create failed");
+        goto cleanup;
+    }
+
+    cJSON_AddStringToObject(root, "imei", imei);
+    cJSON_AddNumberToObject(root, "ts", (double)liot_rtc_get_time_s());
+    cJSON_AddStringToObject(root, "type", "screen.ack");
+    cJSON_AddNumberToObject(root, "seq", (double)seq);
+
+    cJSON_AddItemToObject(root, "data", data);
+    cJSON_AddStringToObject(data, "msgId", msg_id);
+    cJSON_AddStringToObject(data, "status", status);
+    cJSON_AddBoolToObject(data, "shown", (shown != 0U) ? 1 : 0);
+    if ((err != NULL) && (err[0] != '\0'))
+    {
+        cJSON_AddStringToObject(data, "err", err);
+    }
+    data = NULL;
+
+    text = cJSON_PrintUnformatted(root);
+    if (text == NULL)
+    {
+        liot_trace("[PROTO] ack print failed");
+        goto cleanup;
+    }
+
+    text_len = strlen(text);
+    if (text_len + 1U > buf_size)
+    {
+        liot_trace("[PROTO] ack too long: %u", (unsigned)text_len);
+        goto cleanup;
+    }
+
+    memcpy(buf, text, text_len + 1U);
+    result = (int)text_len;
+
+cleanup:
+    if (text != NULL)
+    {
+        cJSON_free(text);
+    }
+    if (data != NULL)
+    {
+        cJSON_Delete(data);
+    }
+    if (root != NULL)
+    {
+        cJSON_Delete(root);
+    }
+
+    return result;
+}
+
+/**
  * @brief 拷贝 JSON 字符串字段
  * @param[in]  obj      JSON 对象
  * @param[in]  key      字段名

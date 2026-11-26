@@ -61,6 +61,23 @@ screen_proto_parse_result_e screen_proto_parse_screen_msg(const uint8_t *payload
                                                           screen_msg_t *out);
 
 /**
+ * @brief 组 screen.ack 回执 JSON
+ * @param[in]  imei    设备 IMEI
+ * @param[in]  msg_id  原样回带的消息 ID
+ * @param[in]  status  displayed / done / restored / failed
+ * @param[in]  shown   内容是否已显示，非 0 为 true
+ * @param[in]  err     status 为 failed 时的原因，可为 NULL
+ * @param[in]  seq     上行序号
+ * @param[out] buf     输出缓冲区
+ * @param[in]  buf_size 缓冲区长度
+ * @return 成功返回 JSON 长度，失败返回 -1
+ */
+int screen_proto_build_ack(const char *imei, const char *msg_id,
+                           const char *status, uint8_t shown,
+                           const char *err, uint8_t seq,
+                           char *buf, uint32_t buf_size);
+
+/**
  * @brief 组 dev.reg 注册 JSON
  * @param[in]  imei     设备 IMEI
  * @param[in]  stu_no   学号

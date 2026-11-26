@@ -61,4 +61,16 @@ const char *screen_mqtt_state_text(void);
  */
 void screen_mqtt_set_rx_handler(screen_mqtt_rx_handler_t handler);
 
+/**
+ * @brief 请求发送一条 screen.ack 回执
+ * @param[in] msg_id 原样回带的消息 ID
+ * @param[in] status displayed / done / restored / failed
+ * @param[in] shown  内容是否已显示，非 0 为 true
+ * @param[in] err    失败原因，可为 NULL
+ * @return 0 已入队，-1 参数错误或队列满
+ * @note 只入队，实际发布在 MQTT 任务中进行，避免跨任务并发操作客户端
+ */
+int screen_mqtt_send_ack(const char *msg_id, const char *status,
+                         uint8_t shown, const char *err);
+
 #endif /* SCREEN_MQTT_H */

@@ -21,6 +21,7 @@
 #include "screen_config.h"
 #include "screen_font.h"
 #include "screen_oled.h"
+#include "screen_text.h"
 
 /* SSD1306 驱动由 basePkg 提供，这里只做外部声明后绑定到 lcdDev */
 LIOT_ADD_DISPLAY(liot_ssd1306_12864_dev);
@@ -62,6 +63,37 @@ static void screen_oled_set_pixel(uint16_t x, uint16_t y, uint8_t color)
 }
 
 /**
+ * @brief 绘制 16x16 占位框（中文等暂无字模的字符）
+ * @param[in] x      左上角 X 坐标
+ * @param[in] y      左上角 Y 坐标
+ * @param[in] invert 非 0 时反显
+ * @return 无
+ */
+static void screen_oled_draw_placeholder(uint16_t x, uint16_t y,
+                                         uint8_t invert)
+{
+    uint8_t  bg = (invert != 0U) ? SCREEN_OLED_ON : SCREEN_OLED_OFF;
+    uint8_t  fg = (invert != 0U) ? SCREEN_OLED_OFF : SCREEN_OLED_ON;
+    uint16_t i;
+
+    screen_oled_fill_rect(x, y, SCREEN_TEXT_CJK_WIDTH, SCREEN_FONT_HEIGHT, bg);
+
+    for (i = 0U; i < SCREEN_TEXT_CJK_WIDTH; i++)
+    {
+        screen_oled_set_pixel((uint16_t)(x + i), y, fg);
+        screen_oled_set_pixel((uint16_t)(x + i),
+                              (uint16_t)(y + SCREEN_FONT_HEIGHT - 1U), fg);
+    }
+
+    for (i = 0U; i < SCREEN_FONT_HEIGHT; i++)
+    {
+        screen_oled_set_pixel(x, (uint16_t)(y + i), fg);
+        screen_oled_set_pixel((uint16_t)(x + SCREEN_TEXT_CJK_WIDTH - 1U),
+                              (uint16_t)(y + i), fg);
+    }
+}
+
+/**
  * @brief 绘制单个 ASCII 字符
  * @param[in] x      左上角 X 坐标
  * @param[in] y      左上角 Y 坐标
@@ -78,27 +110,9 @@ static void screen_oled_draw_char(uint16_t x, uint16_t y, char ch,
 
     if (glyph == NULL)
     {
-        /* 非 ASCII（例如 UTF-8 中文）：画空心方框占位，避免静默丢字 */
+        /* 控制字符等无字模的 ASCII：只清空背景，不画内容 */
         screen_oled_fill_rect(x, y, SCREEN_FONT_WIDTH, SCREEN_FONT_HEIGHT,
                               (invert != 0U) ? SCREEN_OLED_ON : SCREEN_OLED_OFF);
-
-        for (col = 0U; col < SCREEN_FONT_WIDTH; col++)
-        {
-            screen_oled_set_pixel((uint16_t)(x + col), y,
-                                  (invert != 0U) ? SCREEN_OLED_OFF : SCREEN_OLED_ON);
-            screen_oled_set_pixel((uint16_t)(x + col),
-                                  (uint16_t)(y + SCREEN_FONT_HEIGHT - 1U),
-                                  (invert != 0U) ? SCREEN_OLED_OFF : SCREEN_OLED_ON);
-        }
-
-        for (row = 0U; row < SCREEN_FONT_HEIGHT; row++)
-        {
-            screen_oled_set_pixel(x, (uint16_t)(y + row),
-                                  (invert != 0U) ? SCREEN_OLED_OFF : SCREEN_OLED_ON);
-            screen_oled_set_pixel((uint16_t)(x + SCREEN_FONT_WIDTH - 1U),
-                                  (uint16_t)(y + row),
-                                  (invert != 0U) ? SCREEN_OLED_OFF : SCREEN_OLED_ON);
-        }
         return;
     }
 
@@ -292,13 +306,36 @@ int screen_oled_draw_text(uint16_t x, uint16_t y, const char *text,
         return -1;
     }
 
-    /* 不自动换行：超出屏幕右侧的字符直接截断 */
-    while ((*text != '\0') &&
-           ((uint16_t)(x + SCREEN_FONT_WIDTH) <= SCREEN_OLED_WIDTH))
+    /* 按 UTF-8 码点绘制：ASCII 8 像素，中文占 16 像素并画占位框 */
+    while (*text != '\0')
     {
-        screen_oled_draw_char(x, y, *text, invert);
-        x = (uint16_t)(x + SCREEN_FONT_WIDTH);
-        text++;
+        uint32_t cp = 0U;
+        uint32_t n;
+        uint32_t w;
+
+        n = screen_text_utf8_decode(text, &cp);
+        if (n == 0U)
+        {
+            break;
+        }
+
+        w = screen_text_cell_width(cp);
+        if ((uint32_t)(x + w) > SCREEN_OLED_WIDTH)
+        {
+            break;  /* 不自动换行，超出屏幕右侧直接截断 */
+        }
+
+        if (cp < 0x80U)
+        {
+            screen_oled_draw_char(x, y, (char)cp, invert);
+        }
+        else
+        {
+            screen_oled_draw_placeholder(x, y, invert);
+        }
+
+        x = (uint16_t)(x + w);
+        text += n;
     }
 
     return 0;

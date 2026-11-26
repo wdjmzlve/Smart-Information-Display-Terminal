@@ -49,7 +49,7 @@ int screen_mqtt_init(void);
 screen_mqtt_state_e screen_mqtt_get_state(void);
 
 /**
- * @brief 取当前状态的短文本（不超过 7 个字符）
+ * @brief 取当前状态的短文本（4 个字符，便于挤进状态栏）
  * @return 静态字符串指针
  */
 const char *screen_mqtt_state_text(void);

@@ -708,16 +708,16 @@ const char *screen_mqtt_state_text(void)
     switch (s_mqtt_ctx.state)
     {
         case SCREEN_MQTT_STATE_NET_WAIT:
-            return "NETWAIT";
+            return "WAIT";
 
         case SCREEN_MQTT_STATE_CONNECTING:
-            return "CONNECT";
+            return "CONN";
 
         case SCREEN_MQTT_STATE_ONLINE:
-            return "ONLINE";
+            return "ONLN";
 
         case SCREEN_MQTT_STATE_RETRY:
-            return "RETRY";
+            return "RTRY";
 
         case SCREEN_MQTT_STATE_ERROR:
             return "ERROR";

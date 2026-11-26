@@ -99,6 +99,18 @@
 #define SCREEN_UI_TITLE_Y           (0U)            /* 标题栏 Y 坐标 */
 #define SCREEN_UI_LINE1_Y           (16U)           /* 内容第一行 Y 坐标 */
 #define SCREEN_UI_LINE2_Y           (32U)           /* 内容第二行 Y 坐标 */
+#define SCREEN_UI_LINE_HEIGHT       (16U)           /* 内容行高 */
 #define SCREEN_UI_STATUS_Y          (48U)           /* 状态栏 Y 坐标 */
+
+/* ------------------------------ 文本排版 ------------------------------ */
+#define SCREEN_LINE_MAX_BYTES       (32U)           /* 单行缓冲：8 个汉字约 24 字节 */
+#define SCREEN_MAX_LINES            (16U)           /* 最多保留 16 行，避免长文无限占用 */
+#define SCREEN_LINES_PER_PAGE       (2U)            /* 内容区每页 2 行 */
+#define SCREEN_PAGE_INTERVAL_MS     (4000U)         /* 多页时自动翻页间隔 */
+
+/* ------------------------------ 时间换算 ------------------------------ */
+#define SCREEN_SECONDS_PER_MINUTE   (60U)           /* 每小时秒数换算系数 */
+#define SCREEN_MINUTES_PER_HOUR     (60U)           /* 每小时分钟数 */
+#define SCREEN_HOURS_PER_DAY        (24U)           /* 每天小时数 */
 
 #endif /* SCREEN_CONFIG_H */

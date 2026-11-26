@@ -2,14 +2,14 @@
  * @file screen_app.c
  * @brief 云播报屏应用主任务与事件分发
  *
- * Stage 3 职责：
- *   1. 接收 MQTT 下行报文（拷贝后入队）；
- *   2. 解析 screen.msg，非法报文丢弃并告警；
- *   3. 按 msgId 去重，保存最近一条有效消息供后续显示使用。
+ * Stage 4 职责：
+ *   1. 把最近一条 screen.msg 渲染到三区界面；
+ *   2. 标题栏显示 title，内容区按 128 像素折行，每页 2 行自动翻页；
+ *   3. 状态栏显示时间、网络状态与页码。
  *
  * @copyright Copyright (c) 2025 Lierda Technology Co., Ltd.
  * @date 2025-11-26
- * @version 1.3
+ * @version 1.4
  */
 
 #include <stdio.h>
@@ -17,6 +17,7 @@
 
 #include "liot_log.h"
 #include "liot_os.h"
+#include "liot_rtc.h"
 
 #include "screen_app.h"
 #include "screen_config.h"
@@ -24,11 +25,15 @@
 #include "screen_mqtt.h"
 #include "screen_oled.h"
 #include "screen_proto.h"
+#include "screen_text.h"
 
-/* 标题与内容区的演示文本，Stage 3 起由服务器下发内容替换 */
+/* 未收到消息时的演示文本 */
 #define SCREEN_UI_TITLE_TEXT    "SCREEN DEMO"
 #define SCREEN_UI_LINE1_TEXT    "PROJECT 10"
 #define SCREEN_UI_LINE2_TEXT    "CLOUD SCREEN"
+
+/* 状态栏时间文本长度："HH:MM" + 结束符 */
+#define SCREEN_TIME_TEXT_LEN    (6U)
 
 /**
  * @brief 应用运行上下文
@@ -43,7 +48,11 @@ typedef struct
     uint8_t      oled_ready;    /*!< OLED 是否可用，0=不可用 */
     uint8_t      render_failed; /*!< 绘制失败是否已告警，避免每秒刷日志 */
     uint8_t      has_msg;       /*!< 是否已收到有效消息 */
-    screen_msg_t last_msg;      /*!< 最近一条有效消息，Stage 4 用于渲染 */
+    uint8_t      line_count;    /*!< 正文折行后的行数 */
+    uint8_t      page_index;    /*!< 当前页号，从 0 开始 */
+    uint32_t     page_elapsed_ms;                           /*!< 当前页已显示时长 */
+    screen_msg_t last_msg;                                  /*!< 最近一条有效消息 */
+    char         content_lines[SCREEN_MAX_LINES][SCREEN_LINE_MAX_BYTES]; /*!< 折行结果 */
 } screen_app_ctx_t;
 
 static screen_app_ctx_t s_app_ctx;  /*!< 唯一的应用上下文实例 */
@@ -80,15 +89,119 @@ static void screen_app_timer_cb(void *arg)
 }
 
 /**
- * @brief 绘制三区静态画面并刷新
+ * @brief 计算正文总页数
+ * @return 页数；没有内容时返回 0
+ */
+static uint32_t screen_app_page_count(void)
+{
+    if (s_app_ctx.line_count == 0U)
+    {
+        return 0U;
+    }
+
+    return ((uint32_t)s_app_ctx.line_count + SCREEN_LINES_PER_PAGE - 1U) /
+           SCREEN_LINES_PER_PAGE;
+}
+
+/**
+ * @brief 组装状态栏文本：HH:MM 状态 [页码]
+ * @param[out] buf  输出缓冲区
+ * @param[in]  size 缓冲区长度
+ * @return 0 成功，-1 失败
+ */
+static int screen_app_build_status(char *buf, size_t size)
+{
+    char     time_text[SCREEN_TIME_TEXT_LEN];
+    uint32_t pages;
+    int32_t  ts;
+    int      ret;
+
+    if ((buf == NULL) || (size == 0U))
+    {
+        return -1;
+    }
+
+    pages = screen_app_page_count();
+    ts = (int32_t)liot_rtc_get_time_s();
+
+    if (ts > 0)
+    {
+        uint32_t seconds = (uint32_t)ts;
+
+        ret = snprintf(time_text, sizeof(time_text), "%02u:%02u",
+                       (unsigned)((seconds /
+                                   (SCREEN_SECONDS_PER_MINUTE * SCREEN_MINUTES_PER_HOUR)) %
+                                  SCREEN_HOURS_PER_DAY),
+                       (unsigned)((seconds / SCREEN_SECONDS_PER_MINUTE) %
+                                  SCREEN_MINUTES_PER_HOUR));
+        if ((ret < 0) || (ret >= (int)sizeof(time_text)))
+        {
+            return -1;
+        }
+    }
+    else
+    {
+        /* RTC 未对时：用占位符，避免显示 1970 年 */
+        (void)strncpy(time_text, "--:--", sizeof(time_text) - 1U);
+        time_text[sizeof(time_text) - 1U] = '\0';
+    }
+
+    if (pages > 1U)
+    {
+        ret = snprintf(buf, size, "%s %s P%u/%u", time_text,
+                       screen_mqtt_state_text(),
+                       (unsigned)(s_app_ctx.page_index + 1U),
+                       (unsigned)pages);
+    }
+    else
+    {
+        ret = snprintf(buf, size, "%s %s", time_text,
+                       screen_mqtt_state_text());
+    }
+
+    if ((ret < 0) || (ret >= (int)size))
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief 多页时按时间推进页码
+ * @param[in] elapsed_ms 距上次调用的时间
+ * @return 无
+ */
+static void screen_app_update_page(uint32_t elapsed_ms)
+{
+    uint32_t pages = screen_app_page_count();
+
+    if (pages <= 1U)
+    {
+        s_app_ctx.page_index = 0U;
+        s_app_ctx.page_elapsed_ms = 0U;
+        return;
+    }
+
+    s_app_ctx.page_elapsed_ms += elapsed_ms;
+    if (s_app_ctx.page_elapsed_ms >= SCREEN_PAGE_INTERVAL_MS)
+    {
+        s_app_ctx.page_elapsed_ms = 0U;
+        s_app_ctx.page_index = (uint8_t)((s_app_ctx.page_index + 1U) % pages);
+    }
+}
+
+/**
+ * @brief 绘制三区界面并刷新
  * @return 无
  * @note 只在应用主任务中调用，避免多任务同时操作帧缓冲
  */
 static void screen_app_render(void)
 {
-    char status[SCREEN_STATUS_TEXT_LEN];
-    int  ret = 0;
-    int  fmt_ret;
+    char     status[SCREEN_STATUS_TEXT_LEN];
+    uint32_t first_line;
+    uint32_t i;
+    int      ret = 0;
 
     if (s_app_ctx.oled_ready == 0U)
     {
@@ -103,22 +216,45 @@ static void screen_app_render(void)
     /* 标题栏：白底黑字 */
     ret |= screen_oled_fill_rect(0U, SCREEN_UI_TITLE_Y, SCREEN_OLED_WIDTH,
                                  SCREEN_UI_BAR_HEIGHT, SCREEN_OLED_ON);
-    ret |= screen_oled_draw_text(0U, SCREEN_UI_TITLE_Y,
-                                 SCREEN_UI_TITLE_TEXT, 1U);
+    if (s_app_ctx.has_msg != 0U)
+    {
+        ret |= screen_oled_draw_text(0U, SCREEN_UI_TITLE_Y,
+                                     s_app_ctx.last_msg.title, 1U);
+    }
+    else
+    {
+        ret |= screen_oled_draw_text(0U, SCREEN_UI_TITLE_Y,
+                                     SCREEN_UI_TITLE_TEXT, 1U);
+    }
 
-    /* 内容区：两行 ASCII 文本 */
-    ret |= screen_oled_draw_text(0U, SCREEN_UI_LINE1_Y,
-                                 SCREEN_UI_LINE1_TEXT, 0U);
-    ret |= screen_oled_draw_text(0U, SCREEN_UI_LINE2_Y,
-                                 SCREEN_UI_LINE2_TEXT, 0U);
+    /* 内容区：每页两行，超出部分翻页显示 */
+    if ((s_app_ctx.has_msg != 0U) && (s_app_ctx.line_count > 0U))
+    {
+        first_line = (uint32_t)s_app_ctx.page_index * SCREEN_LINES_PER_PAGE;
 
-    /* 状态栏：白底黑字，显示启动后的 tick 计数 */
+        for (i = 0U; i < SCREEN_LINES_PER_PAGE; i++)
+        {
+            if ((first_line + i) < (uint32_t)s_app_ctx.line_count)
+            {
+                ret |= screen_oled_draw_text(
+                    0U,
+                    (uint16_t)(SCREEN_UI_LINE1_Y + i * SCREEN_UI_LINE_HEIGHT),
+                    s_app_ctx.content_lines[first_line + i], 0U);
+            }
+        }
+    }
+    else
+    {
+        ret |= screen_oled_draw_text(0U, SCREEN_UI_LINE1_Y,
+                                     SCREEN_UI_LINE1_TEXT, 0U);
+        ret |= screen_oled_draw_text(0U, SCREEN_UI_LINE2_Y,
+                                     SCREEN_UI_LINE2_TEXT, 0U);
+    }
+
+    /* 状态栏：白底黑字，显示时间、网络状态与页码 */
     ret |= screen_oled_fill_rect(0U, SCREEN_UI_STATUS_Y, SCREEN_OLED_WIDTH,
                                  SCREEN_UI_BAR_HEIGHT, SCREEN_OLED_ON);
-    fmt_ret = snprintf(status, sizeof(status), "%04u %s",
-                       (unsigned)(s_app_ctx.tick_count % 10000U),
-                       screen_mqtt_state_text());
-    if ((fmt_ret < 0) || (fmt_ret >= (int)sizeof(status)))
+    if (screen_app_build_status(status, sizeof(status)) != 0)
     {
         ret = -1;
     }
@@ -144,9 +280,9 @@ static void screen_app_render(void)
 }
 
 /**
- * @brief 初始化应用队列、周期定时器与 OLED
+ * @brief 初始化应用队列、周期定时器、OLED 与网络
  * @return 0 成功，-1 队列/定时器失败
- * @note OLED 初始化失败不阻塞主循环，串口会打印错误，便于单独排查接线
+ * @note 外设初始化失败不阻塞主循环，串口会打印错误，便于单独排查
  */
 int screen_app_init(void)
 {
@@ -276,7 +412,6 @@ int screen_app_post_downlink(const uint8_t *data, uint16_t len)
  * @param[in] data 载荷指针
  * @param[in] len  载荷长度
  * @return 无
- * @note MQTT 层只关心“收到数据”，入队失败在这里统一告警
  */
 static void screen_app_rx_bridge(const uint8_t *data, uint16_t len)
 {
@@ -287,7 +422,7 @@ static void screen_app_rx_bridge(const uint8_t *data, uint16_t len)
 }
 
 /**
- * @brief 处理一条下行报文：解析、告警、去重
+ * @brief 处理一条下行报文：解析、告警、去重、折行
  * @param[in] event 下行事件
  * @return 无
  */
@@ -337,13 +472,21 @@ static void screen_app_handle_downlink(const screen_event_t *event)
 
     s_app_ctx.last_msg = s_rx_msg;
     s_app_ctx.has_msg = 1U;
+    s_app_ctx.line_count = (uint8_t)screen_text_wrap(s_rx_msg.content,
+                                                     s_app_ctx.content_lines,
+                                                     SCREEN_MAX_LINES,
+                                                     SCREEN_OLED_WIDTH);
+    s_app_ctx.page_index = 0U;
+    s_app_ctx.page_elapsed_ms = 0U;
 
-    liot_trace("[APP] rx msgId=%s level=%d tts=%d",
-               s_rx_msg.msg_id, s_rx_msg.level, s_rx_msg.tts);
+    liot_trace("[APP] rx msgId=%s level=%d tts=%d lines=%u",
+               s_rx_msg.msg_id, s_rx_msg.level, s_rx_msg.tts,
+               (unsigned)s_app_ctx.line_count);
     liot_trace("[APP] title=%s", s_rx_msg.title);
     liot_trace("[APP] content=%s", s_rx_msg.content);
 
-    /* Stage 4 在这里把 s_app_ctx.last_msg 渲染到内容区 */
+    /* 新消息立即上屏，不等下一次 tick */
+    screen_app_render();
 }
 
 /**
@@ -361,9 +504,10 @@ static void screen_app_handle_event(const screen_event_t *event)
     switch (event->id)
     {
         case SCREEN_EV_TICK:
-            /* 只更新状态栏，不打印日志，避免每秒刷屏淹没网络输出 */
+            /* 只更新状态栏与页码，不打印日志，避免每秒刷屏 */
             s_app_ctx.tick_count++;
             screen_led_tick(event->tick_ms);
+            screen_app_update_page(event->tick_ms);
             screen_app_render();
             break;
 

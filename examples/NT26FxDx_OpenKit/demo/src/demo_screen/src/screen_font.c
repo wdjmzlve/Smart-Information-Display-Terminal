@@ -135,3 +135,46 @@ const uint8_t *screen_font_ascii_glyph(char ch)
 
     return s_font_ascii[code - SCREEN_FONT_FIRST_CHAR];
 }
+
+/* GB2312 一级汉字点阵，由 tools/gen_cjk_font.ps1 生成的 screen_font_cjk.c 提供 */
+extern const uint32_t screen_font_cjk_count;
+extern const uint16_t screen_font_cjk_unicode[];
+extern const uint8_t  screen_font_cjk_bitmap[];
+
+/**
+ * @brief 取汉字的 16x16 点阵
+ * @param[in] codepoint UTF-8 解码后的 Unicode 码点
+ * @return 32 字节字模指针；字库中没有该字时返回 NULL
+ * @note 索引表按码点升序排列，用二分查找，单个字最多 12 次比较
+ */
+const uint8_t *screen_font_cjk_glyph(uint32_t codepoint)
+{
+    uint32_t low = 0U;
+    uint32_t high = screen_font_cjk_count;
+
+    if ((codepoint < SCREEN_FONT_CJK_FIRST) || (codepoint > SCREEN_FONT_CJK_LAST))
+    {
+        return NULL;
+    }
+
+    while (low < high)
+    {
+        uint32_t mid = low + ((high - low) / 2U);
+
+        if ((uint32_t)screen_font_cjk_unicode[mid] == codepoint)
+        {
+            return &screen_font_cjk_bitmap[mid * SCREEN_FONT_CJK_BYTES];
+        }
+
+        if ((uint32_t)screen_font_cjk_unicode[mid] < codepoint)
+        {
+            low = mid + 1U;
+        }
+        else
+        {
+            high = mid;
+        }
+    }
+
+    return NULL;
+}

@@ -92,9 +92,11 @@ BUILD_COMP_TTS_EN   := y
 TTS_RESOURCE_TYPE   ?= 16k_zh
 
 # TTS 资源占 604 KB，默认代码区只剩 208 KB（链接会溢出约 190 KB）。
-# 借用 256 KB 内部文件系统空间给代码区：FS 由 780 KB 降到约 524 KB，
-# 仍远大于 mem_map_chk.h 要求的 8 KB；本工程持久化用 NVM，不依赖该 FS。
-CODE_REGION_ADJUST  ?= 0x40000
+# 借用内部文件系统空间给代码区：
+#   0x40000 供应用代码；
+#   另外 0x28000 预留给中文 16x16 点阵字库（GB2312 一级 3755 字，约 128 KB）。
+# FS 仍远大于 mem_map_chk.h 要求的 8 KB，且 NVM 只占几 KB。
+CODE_REGION_ADJUST  ?= 0x68000
 
 else ifeq ($(DEMO_NAME), demo_watch)
 

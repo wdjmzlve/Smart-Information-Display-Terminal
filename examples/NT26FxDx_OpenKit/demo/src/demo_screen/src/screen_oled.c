@@ -135,6 +135,40 @@ static void screen_oled_draw_char(uint16_t x, uint16_t y, char ch,
 }
 
 /**
+ * @brief 绘制单个 16x16 汉字
+ * @param[in] x      左上角 X 坐标
+ * @param[in] y      左上角 Y 坐标
+ * @param[in] glyph  32 字节字模
+ * @param[in] invert 非 0 时反显
+ * @return 无
+ */
+static void screen_oled_draw_cjk(uint16_t x, uint16_t y, const uint8_t *glyph,
+                                 uint8_t invert)
+{
+    uint16_t row;
+    uint16_t col;
+
+    for (row = 0U; row < SCREEN_FONT_CJK_HEIGHT; row++)
+    {
+        /* 每行 2 字节，高字节在左 */
+        uint16_t bits = (uint16_t)(((uint16_t)glyph[row * 2U] << 8) |
+                                   (uint16_t)glyph[row * 2U + 1U]);
+
+        for (col = 0U; col < SCREEN_FONT_CJK_WIDTH; col++)
+        {
+            uint8_t on = (uint8_t)((bits >> (15U - col)) & 0x01U);
+
+            if (invert != 0U)
+            {
+                on = (uint8_t)((on == 0U) ? 1U : 0U);
+            }
+
+            screen_oled_set_pixel((uint16_t)(x + col), (uint16_t)(y + row), on);
+        }
+    }
+}
+
+/**
  * @brief 初始化 OLED
  * @return 0 成功，-1 失败
  */
@@ -306,7 +340,7 @@ int screen_oled_draw_text(uint16_t x, uint16_t y, const char *text,
         return -1;
     }
 
-    /* 按 UTF-8 码点绘制：ASCII 8 像素，中文占 16 像素并画占位框 */
+    /* 按 UTF-8 码点绘制：ASCII 8 像素，汉字 16 像素，字库缺失时画占位框 */
     while (*text != '\0')
     {
         uint32_t cp = 0U;
@@ -331,7 +365,17 @@ int screen_oled_draw_text(uint16_t x, uint16_t y, const char *text,
         }
         else
         {
-            screen_oled_draw_placeholder(x, y, invert);
+            const uint8_t *glyph = screen_font_cjk_glyph(cp);
+
+            if (glyph != NULL)
+            {
+                screen_oled_draw_cjk(x, y, glyph, invert);
+            }
+            else
+            {
+                /* 一级字库以外的生僻字或符号，保留方框提示缺字 */
+                screen_oled_draw_placeholder(x, y, invert);
+            }
         }
 
         x = (uint16_t)(x + w);

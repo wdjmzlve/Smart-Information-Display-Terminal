@@ -26,6 +26,15 @@ int screen_app_init(void);
 int screen_app_post(const screen_event_t *event);
 
 /**
+ * @brief 把一条 MQTT 下行报文投递给应用主任务
+ * @param[in] data 载荷指针，回调期间有效
+ * @param[in] len  载荷长度
+ * @return 0 成功，-1 参数错误、过长或内存不足
+ * @note 可在 MQTT 回调上下文中调用，内部会拷贝载荷
+ */
+int screen_app_post_downlink(const uint8_t *data, uint16_t len);
+
+/**
  * @brief 进入应用主循环（正常情况下不返回）
  * @return 无
  */

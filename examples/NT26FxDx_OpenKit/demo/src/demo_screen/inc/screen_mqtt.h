@@ -13,6 +13,15 @@
 #ifndef SCREEN_MQTT_H
 #define SCREEN_MQTT_H
 
+#include <stdint.h>
+
+/**
+ * @brief 下行报文回调
+ *
+ * 运行在 MQTT 内部任务，回调里只能拷贝数据，不能解析或刷屏。
+ */
+typedef void (*screen_mqtt_rx_handler_t)(const uint8_t *payload, uint16_t len);
+
 /**
  * @brief 网络/MQTT 状态
  */
@@ -44,5 +53,12 @@ screen_mqtt_state_e screen_mqtt_get_state(void);
  * @return 静态字符串指针
  */
 const char *screen_mqtt_state_text(void);
+
+/**
+ * @brief 注册下行报文回调
+ * @param[in] handler 回调函数；传 NULL 表示只打印日志
+ * @return 无
+ */
+void screen_mqtt_set_rx_handler(screen_mqtt_rx_handler_t handler);
 
 #endif /* SCREEN_MQTT_H */

@@ -73,6 +73,16 @@
 #define SCREEN_NET_REG_RETRY_MAX        (10U)       /* 注网重试次数 */
 #define SCREEN_NET_RETRY_DELAY_MS       (1000U)     /* 注网重试间隔 */
 
+/* ------------------------------ 下行消息 ------------------------------ */
+#define SCREEN_DOWNLINK_MAX_LEN         (512U)      /* 单条 MQTT 下行载荷上限 */
+#define SCREEN_MSG_ID_MAX_LEN           (48U)       /* msgId 缓冲区 */
+#define SCREEN_MSG_TITLE_MAX_LEN        (64U)       /* 标题缓冲区 */
+#define SCREEN_MSG_CONTENT_MAX_LEN      (256U)      /* 正文缓冲区 */
+#define SCREEN_MSG_LEVEL_MIN            (1)         /* 消息等级下限：普通 */
+#define SCREEN_MSG_LEVEL_MAX            (3)         /* 消息等级上限：紧急 */
+#define SCREEN_MSG_TTS_OFF              (0)         /* 不播报 */
+#define SCREEN_MSG_TTS_ON               (1)         /* 需要播报 */
+
 /* ------------------------------ 协议缓冲区 ------------------------------ */
 #define SCREEN_TOPIC_MAX_LEN            (64U)       /* topic 缓冲区 */
 #define SCREEN_URL_MAX_LEN              (64U)       /* mqtt://host:port 缓冲区 */

@@ -203,3 +203,217 @@ int screen_proto_build_heartbeat(const char *imei, uint8_t seq,
 
     return (int)idx;
 }
+
+/**
+ * @brief 拷贝 JSON 字符串字段
+ * @param[in]  obj      JSON 对象
+ * @param[in]  key      字段名
+ * @param[out] dst      输出缓冲区
+ * @param[in]  dst_size 缓冲区长度
+ * @param[in]  required 1 表示字段缺失视为错误
+ * @return 0 成功，-1 缺失或类型错误
+ */
+static int screen_proto_copy_string(const cJSON *obj, const char *key,
+                                    char *dst, size_t dst_size, int required)
+{
+    const cJSON *item;
+    size_t       len;
+
+    item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (item == NULL)
+    {
+        return (required != 0) ? -1 : 0;
+    }
+
+    if (!cJSON_IsString(item) || (item->valuestring == NULL))
+    {
+        return -1;
+    }
+
+    len = strlen(item->valuestring);
+    if (len >= dst_size)
+    {
+        len = dst_size - 1U;    /* 超长截断，但仍保证 '\0' 结尾 */
+    }
+
+    memcpy(dst, item->valuestring, len);
+    dst[len] = '\0';
+    return 0;
+}
+
+/**
+ * @brief 读取 JSON 整数字段
+ * @param[in]  obj JSON 对象
+ * @param[in]  key 字段名
+ * @param[out] out 输出值
+ * @return 0 成功，-1 缺失或不是数字
+ */
+static int screen_proto_get_int(const cJSON *obj, const char *key, int *out)
+{
+    const cJSON *item;
+
+    item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (!cJSON_IsNumber(item))
+    {
+        return -1;
+    }
+
+    *out = item->valueint;
+    return 0;
+}
+
+/**
+ * @brief 解析 screen.msg
+ * @param[in]  payload 下行载荷
+ * @param[in]  len     载荷长度
+ * @param[out] out     解析结果
+ * @return 解析结果码
+ */
+screen_proto_parse_result_e screen_proto_parse_screen_msg(const uint8_t *payload,
+                                                          uint16_t len,
+                                                          screen_msg_t *out)
+{
+    cJSON *root = NULL;
+    cJSON *parsed_data = NULL;
+    const cJSON *type_item;
+    const cJSON *data;
+    const cJSON *ts_item;
+    const cJSON *tts_item;
+    screen_proto_parse_result_e result = SCREEN_PROTO_PARSE_INVALID_JSON;
+    int level = 0;
+    int tts = SCREEN_MSG_TTS_OFF;
+
+    if ((payload == NULL) || (out == NULL) || (len == 0U))
+    {
+        return SCREEN_PROTO_PARSE_INVALID_JSON;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    /* 载荷不保证以 '\0' 结尾，必须按长度解析 */
+    root = cJSON_ParseWithLength((const char *)payload, (size_t)len);
+    if (root == NULL)
+    {
+        return SCREEN_PROTO_PARSE_INVALID_JSON;
+    }
+
+    type_item = cJSON_GetObjectItemCaseSensitive(root, "type");
+    if (!cJSON_IsString(type_item) || (type_item->valuestring == NULL) ||
+        (strcmp(type_item->valuestring, "screen.msg") != 0))
+    {
+        result = SCREEN_PROTO_PARSE_NOT_SCREEN_MSG;
+        goto done;
+    }
+
+    data = cJSON_GetObjectItemCaseSensitive(root, "data");
+
+    /* 少数服务器会把 data 作为字符串下发，这里尝试再解析一次 */
+    if (cJSON_IsString(data) && (data->valuestring != NULL))
+    {
+        parsed_data = cJSON_Parse(data->valuestring);
+        if (parsed_data != NULL)
+        {
+            data = parsed_data;
+        }
+    }
+
+    if (!cJSON_IsObject(data))
+    {
+        liot_trace("[PROTO] missing data object");
+        result = SCREEN_PROTO_PARSE_MISSING_FIELD;
+        goto done;
+    }
+
+    /*
+     * 部分服务器面板会把完整报文再包一层，真正的字段在 data.data 里。
+     * 只兼容一层嵌套，且仅当 data 自身没有 msgId 时才下钻，避免误判。
+     */
+    if (cJSON_GetObjectItemCaseSensitive(data, "msgId") == NULL)
+    {
+        const cJSON *nested = cJSON_GetObjectItemCaseSensitive(data, "data");
+
+        if (cJSON_IsObject(nested))
+        {
+            liot_trace("[PROTO] unwrap nested data");
+            data = nested;
+        }
+    }
+
+    if (screen_proto_copy_string(data, "msgId", out->msg_id,
+                                 sizeof(out->msg_id), 1) != 0)
+    {
+        liot_trace("[PROTO] missing msgId");
+        result = SCREEN_PROTO_PARSE_MISSING_FIELD;
+        goto done;
+    }
+    if (out->msg_id[0] == '\0')
+    {
+        liot_trace("[PROTO] empty msgId");
+        result = SCREEN_PROTO_PARSE_BAD_VALUE;
+        goto done;
+    }
+
+    if (screen_proto_copy_string(data, "title", out->title,
+                                 sizeof(out->title), 1) != 0)
+    {
+        liot_trace("[PROTO] missing title");
+        result = SCREEN_PROTO_PARSE_MISSING_FIELD;
+        goto done;
+    }
+
+    if (screen_proto_copy_string(data, "content", out->content,
+                                 sizeof(out->content), 1) != 0)
+    {
+        liot_trace("[PROTO] missing content");
+        result = SCREEN_PROTO_PARSE_MISSING_FIELD;
+        goto done;
+    }
+
+    if (screen_proto_get_int(data, "level", &level) != 0)
+    {
+        liot_trace("[PROTO] missing level");
+        result = SCREEN_PROTO_PARSE_MISSING_FIELD;
+        goto done;
+    }
+    if ((level < SCREEN_MSG_LEVEL_MIN) || (level > SCREEN_MSG_LEVEL_MAX))
+    {
+        result = SCREEN_PROTO_PARSE_BAD_VALUE;
+        goto done;
+    }
+
+    /* tts 可选：缺省按“仅显示”处理；存在但不是数字则判为非法 */
+    tts_item = cJSON_GetObjectItemCaseSensitive(data, "tts");
+    if (tts_item != NULL)
+    {
+        if (!cJSON_IsNumber(tts_item))
+        {
+            result = SCREEN_PROTO_PARSE_BAD_VALUE;
+            goto done;
+        }
+
+        tts = tts_item->valueint;
+        if ((tts != SCREEN_MSG_TTS_OFF) && (tts != SCREEN_MSG_TTS_ON))
+        {
+            result = SCREEN_PROTO_PARSE_BAD_VALUE;
+            goto done;
+        }
+    }
+
+    ts_item = cJSON_GetObjectItemCaseSensitive(root, "ts");
+    if (cJSON_IsNumber(ts_item) && (ts_item->valuedouble > 0))
+    {
+        out->ts = (uint32_t)ts_item->valuedouble;
+    }
+
+    out->level = level;
+    out->tts = tts;
+    result = SCREEN_PROTO_PARSE_OK;
+
+done:
+    if (parsed_data != NULL)
+    {
+        cJSON_Delete(parsed_data);
+    }
+    cJSON_Delete(root);
+    return result;
+}

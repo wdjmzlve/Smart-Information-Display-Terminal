@@ -64,6 +64,7 @@ typedef struct
 
     volatile uint8_t connected;             /*!< 1=已连接 */
     volatile screen_mqtt_state_e state;     /*!< 当前状态 */
+    screen_mqtt_rx_handler_t rx_handler;    /*!< 下行报文回调，可为 NULL */
 } screen_mqtt_ctx_t;
 
 static screen_mqtt_ctx_t s_mqtt_ctx;
@@ -163,7 +164,7 @@ static void screen_mqtt_event_cb(liot_mqtt_client_t *client, int event,
  * @param[in] payload     载荷
  * @param[in] payload_len 载荷长度
  * @return 无
- * @note Stage 2 只打印日志，Stage 3 再转发给应用主任务
+ * @note 运行在 MQTT 内部任务，只做主题过滤并把载荷转交给应用回调
  */
 static void screen_mqtt_inpub_cb(liot_mqtt_client_t *client, void *arg,
                                  int pkt_id, const char *topic,
@@ -174,10 +175,27 @@ static void screen_mqtt_inpub_cb(liot_mqtt_client_t *client, void *arg,
     (void)arg;
     (void)pkt_id;
 
-    /* Stage 2 只确认能收到下行报文；Stage 3 再解析并转发给应用主任务 */
-    liot_trace("[MQTT] rx topic=%s len=%u first=0x%02X",
-               (topic != NULL) ? topic : "?", (unsigned)payload_len,
-               (payload != NULL) ? (unsigned)payload[0] : 0U);
+    /* 只接受本设备的下行主题，其他主题（如系统回包）直接忽略 */
+    if ((topic != NULL) && (strcmp(topic, s_mqtt_ctx.topic_sub) != 0))
+    {
+        liot_trace("[MQTT] ignore topic=%s", topic);
+        return;
+    }
+
+    if ((payload == NULL) || (payload_len == 0U))
+    {
+        liot_trace("[MQTT] empty payload");
+        return;
+    }
+
+    if (s_mqtt_ctx.rx_handler != NULL)
+    {
+        s_mqtt_ctx.rx_handler((const uint8_t *)payload, (uint16_t)payload_len);
+    }
+    else
+    {
+        liot_trace("[MQTT] rx without handler, len=%u", (unsigned)payload_len);
+    }
 }
 
 /**
@@ -708,4 +726,14 @@ const char *screen_mqtt_state_text(void)
         default:
             return "OFF";
     }
+}
+
+/**
+ * @brief 注册下行报文回调
+ * @param[in] handler 回调函数
+ * @return 无
+ */
+void screen_mqtt_set_rx_handler(screen_mqtt_rx_handler_t handler)
+{
+    s_mqtt_ctx.rx_handler = handler;
 }

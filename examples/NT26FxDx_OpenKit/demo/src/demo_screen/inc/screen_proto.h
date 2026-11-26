@@ -16,11 +16,49 @@
 
 #include <stdint.h>
 
+#include "screen_config.h"
+
 #define SCREEN_FRAME_HEADER     (0xAAU)     /*!< 通用上行帧帧头 */
 #define SCREEN_FRAME_FOOTER     (0x0FU)     /*!< 三种帧统一帧尾 */
 #define SCREEN_FRAME_TYPE_HB    (0x01U)     /*!< 心跳消息类型 */
 #define SCREEN_HB_PAYLOAD_LEN   (10U)       /*!< 心跳 payload 固定 10 字节 */
 #define SCREEN_HB_FRAME_LEN     (9U + SCREEN_HB_PAYLOAD_LEN)
+
+/**
+ * @brief 解析后的 screen.msg 消息
+ */
+typedef struct
+{
+    char     msg_id[SCREEN_MSG_ID_MAX_LEN];             /*!< 消息唯一标识，原样回执 */
+    char     title[SCREEN_MSG_TITLE_MAX_LEN];           /*!< 标题 */
+    char     content[SCREEN_MSG_CONTENT_MAX_LEN];       /*!< 正文 */
+    int      level;                                     /*!< 1 普通 / 2 提醒 / 3 紧急 */
+    int      tts;                                       /*!< 1 需要语音播报 */
+    uint32_t ts;                                        /*!< 服务器时间戳 */
+} screen_msg_t;
+
+/**
+ * @brief 下行解析结果
+ */
+typedef enum
+{
+    SCREEN_PROTO_PARSE_OK = 0,          /*!< 解析成功 */
+    SCREEN_PROTO_PARSE_NOT_SCREEN_MSG,  /*!< 不是 screen.msg，静默忽略 */
+    SCREEN_PROTO_PARSE_INVALID_JSON,    /*!< JSON 语法错误 */
+    SCREEN_PROTO_PARSE_MISSING_FIELD,   /*!< 缺少必填字段 */
+    SCREEN_PROTO_PARSE_BAD_VALUE        /*!< 字段类型或取值非法 */
+} screen_proto_parse_result_e;
+
+/**
+ * @brief 解析屏幕消息
+ * @param[in]  payload 下行载荷，不要求以 '\0' 结尾
+ * @param[in]  len     载荷长度
+ * @param[out] out     解析结果，函数内部会先清零
+ * @return 解析结果
+ */
+screen_proto_parse_result_e screen_proto_parse_screen_msg(const uint8_t *payload,
+                                                          uint16_t len,
+                                                          screen_msg_t *out);
 
 /**
  * @brief 组 dev.reg 注册 JSON

@@ -1,0 +1,48 @@
+/**
+ * @file screen_mqtt.h
+ * @brief 云播报屏 MQTT 连接、注册与心跳
+ *
+ * MQTT 客户端运行在独立任务中，应用主任务只读取状态，
+ * 避免拨号与重连阻塞界面刷新。
+ *
+ * @copyright Copyright (c) 2025 Lierda Technology Co., Ltd.
+ * @date 2025-11-26
+ * @version 1.0
+ */
+
+#ifndef SCREEN_MQTT_H
+#define SCREEN_MQTT_H
+
+/**
+ * @brief 网络/MQTT 状态
+ */
+typedef enum
+{
+    SCREEN_MQTT_STATE_OFF = 0,      /*!< 模块未启动 */
+    SCREEN_MQTT_STATE_NET_WAIT,     /*!< 等待网络注册与拨号 */
+    SCREEN_MQTT_STATE_CONNECTING,   /*!< 正在连接 broker */
+    SCREEN_MQTT_STATE_ONLINE,       /*!< 已连接并完成注册 */
+    SCREEN_MQTT_STATE_RETRY,        /*!< 连接失败，等待重试 */
+    SCREEN_MQTT_STATE_ERROR,        /*!< 初始化失败，无法继续 */
+    SCREEN_MQTT_STATE_MAX           /*!< 枚举上界 */
+} screen_mqtt_state_e;
+
+/**
+ * @brief 启动 MQTT 任务
+ * @return 0 成功，-1 创建队列/信号量/任务失败
+ */
+int screen_mqtt_init(void);
+
+/**
+ * @brief 读取当前状态，供界面状态栏使用
+ * @return 当前状态
+ */
+screen_mqtt_state_e screen_mqtt_get_state(void);
+
+/**
+ * @brief 取当前状态的短文本（不超过 7 个字符）
+ * @return 静态字符串指针
+ */
+const char *screen_mqtt_state_text(void);
+
+#endif /* SCREEN_MQTT_H */

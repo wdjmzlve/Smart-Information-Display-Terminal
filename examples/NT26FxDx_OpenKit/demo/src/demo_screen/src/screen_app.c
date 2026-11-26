@@ -21,6 +21,7 @@
 #include "screen_app.h"
 #include "screen_config.h"
 #include "screen_led.h"
+#include "screen_mqtt.h"
 #include "screen_oled.h"
 
 /* 标题与内容区的演示文本，Stage 3 起由服务器下发内容替换 */
@@ -105,8 +106,9 @@ static void screen_app_render(void)
     /* 状态栏：白底黑字，显示启动后的 tick 计数 */
     ret |= screen_oled_fill_rect(0U, SCREEN_UI_STATUS_Y, SCREEN_OLED_WIDTH,
                                  SCREEN_UI_BAR_HEIGHT, SCREEN_OLED_ON);
-    fmt_ret = snprintf(status, sizeof(status), "BOOT %04u",
-                       (unsigned)(s_app_ctx.tick_count % 10000U));
+    fmt_ret = snprintf(status, sizeof(status), "%04u %s",
+                       (unsigned)(s_app_ctx.tick_count % 10000U),
+                       screen_mqtt_state_text());
     if ((fmt_ret < 0) || (fmt_ret >= (int)sizeof(status)))
     {
         ret = -1;
@@ -177,7 +179,13 @@ int screen_app_init(void)
         liot_trace("[APP] oled init failed, display disabled");
     }
 
-    liot_trace("[APP] init done, tick=%u ms", (unsigned)SCREEN_TICK_PERIOD_MS);
+    /* 网络在独立任务中启动，不阻塞界面刷新 */
+    if (screen_mqtt_init() != 0)
+    {
+        liot_trace("[APP] mqtt init failed, network disabled");
+    }
+
+    // liot_trace("[APP] init done, tick=%u ms", (unsigned)SCREEN_TICK_PERIOD_MS);
     return 0;
 }
 
@@ -217,8 +225,8 @@ static void screen_app_handle_event(const screen_event_t *event)
     switch (event->id)
     {
         case SCREEN_EV_TICK:
+            /* 只更新状态栏，不打印日志，避免每秒刷屏淹没网络输出 */
             s_app_ctx.tick_count++;
-            liot_trace("[APP] tick %u", (unsigned)s_app_ctx.tick_count);
             screen_led_tick(event->tick_ms);
             screen_app_render();
             break;

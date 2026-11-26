@@ -33,5 +33,22 @@
 /* ------------------------------ 缓冲区长度 ------------------------------ */
 #define SCREEN_IMEI_LEN             (16U)           /* 15 位 IMEI + 结束符 */
 #define SCREEN_FW_VER_LEN           (32U)           /* 固件版本字符串缓冲区 */
+#define SCREEN_STATUS_TEXT_LEN      (20U)           /* 状态栏字符串缓冲区 */
+
+/* ------------------------------ OLED 硬件 ------------------------------ */
+#define SCREEN_OLED_I2C_NUM         (1)             /* OLED 挂在 I2C1 */
+#define SCREEN_OLED_I2C_ADDR        (0x3C)          /* SSD1306 7 位从地址 */
+#define SCREEN_OLED_SCL_PIN         (66)            /* 模块引脚 SCL */
+#define SCREEN_OLED_SDA_PIN         (57)            /* 模块引脚 SDA */
+#define SCREEN_OLED_SCL_FUNC        (2U)            /* 复用功能 2，对应 L_PIN_FUNC_2 */
+#define SCREEN_OLED_SDA_FUNC        (3U)            /* 复用功能 3，对应 L_PIN_FUNC_3 */
+#define SCREEN_OLED_POWER_DELAY_MS  (300U)          /* LDO 稳定到发初始化命令的等待时间 */
+
+/* ------------------------------ 界面布局 ------------------------------ */
+#define SCREEN_UI_BAR_HEIGHT        (16U)           /* 标题栏/状态栏高度 */
+#define SCREEN_UI_TITLE_Y           (0U)            /* 标题栏 Y 坐标 */
+#define SCREEN_UI_LINE1_Y           (16U)           /* 内容第一行 Y 坐标 */
+#define SCREEN_UI_LINE2_Y           (32U)           /* 内容第二行 Y 坐标 */
+#define SCREEN_UI_STATUS_Y          (48U)           /* 状态栏 Y 坐标 */
 
 #endif /* SCREEN_CONFIG_H */

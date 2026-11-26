@@ -2,16 +2,17 @@
  * @file screen_app.c
  * @brief 云播报屏应用主任务与事件分发
  *
- * 骨架阶段职责：
+ * Stage 1 职责：
  *   1. 创建事件队列与 1 s 周期定时器；
- *   2. 定时器回调只投递事件，不做业务；
- *   3. 主循环消费事件并打印 tick，验证 RTOS 链路。
+ *   2. 初始化 SSD1306 并绘制固定的三区画面；
+ *   3. 每次 tick 更新状态栏，验证帧缓冲与刷新链路。
  *
  * @copyright Copyright (c) 2025 Lierda Technology Co., Ltd.
- * @date 2025-11-25
- * @version 1.0
+ * @date 2025-11-26
+ * @version 1.1
  */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "liot_log.h"
@@ -20,6 +21,12 @@
 #include "screen_app.h"
 #include "screen_config.h"
 #include "screen_led.h"
+#include "screen_oled.h"
+
+/* 标题与内容区的演示文本，Stage 3 起由服务器下发内容替换 */
+#define SCREEN_UI_TITLE_TEXT    "SCREEN DEMO"
+#define SCREEN_UI_LINE1_TEXT    "PROJECT 10"
+#define SCREEN_UI_LINE2_TEXT    "CLOUD SCREEN"
 
 /**
  * @brief 应用运行上下文
@@ -31,6 +38,8 @@ typedef struct
     liot_queue_t queue;         /*!< 事件队列句柄 */
     liot_timer_t timer;         /*!< 周期定时器句柄 */
     uint32_t     tick_count;    /*!< 已处理的 tick 数量，用于串口验证 */
+    uint8_t      oled_ready;    /*!< OLED 是否可用，0=不可用 */
+    uint8_t      render_failed; /*!< 绘制失败是否已告警，避免每秒刷日志 */
 } screen_app_ctx_t;
 
 static screen_app_ctx_t s_app_ctx;  /*!< 唯一的应用上下文实例 */
@@ -61,8 +70,72 @@ static void screen_app_timer_cb(void *arg)
 }
 
 /**
- * @brief 初始化应用队列与周期定时器
- * @return 0 成功，-1 失败
+ * @brief 绘制三区静态画面并刷新
+ * @return 无
+ * @note 只在应用主任务中调用，避免多任务同时操作帧缓冲
+ */
+static void screen_app_render(void)
+{
+    char status[SCREEN_STATUS_TEXT_LEN];
+    int  ret = 0;
+    int  fmt_ret;
+
+    if (s_app_ctx.oled_ready == 0U)
+    {
+        return;
+    }
+
+    if (screen_oled_clear() != 0)
+    {
+        return;
+    }
+
+    /* 标题栏：白底黑字 */
+    ret |= screen_oled_fill_rect(0U, SCREEN_UI_TITLE_Y, SCREEN_OLED_WIDTH,
+                                 SCREEN_UI_BAR_HEIGHT, SCREEN_OLED_ON);
+    ret |= screen_oled_draw_text(0U, SCREEN_UI_TITLE_Y,
+                                 SCREEN_UI_TITLE_TEXT, 1U);
+
+    /* 内容区：两行 ASCII 文本 */
+    ret |= screen_oled_draw_text(0U, SCREEN_UI_LINE1_Y,
+                                 SCREEN_UI_LINE1_TEXT, 0U);
+    ret |= screen_oled_draw_text(0U, SCREEN_UI_LINE2_Y,
+                                 SCREEN_UI_LINE2_TEXT, 0U);
+
+    /* 状态栏：白底黑字，显示启动后的 tick 计数 */
+    ret |= screen_oled_fill_rect(0U, SCREEN_UI_STATUS_Y, SCREEN_OLED_WIDTH,
+                                 SCREEN_UI_BAR_HEIGHT, SCREEN_OLED_ON);
+    fmt_ret = snprintf(status, sizeof(status), "BOOT %04u",
+                       (unsigned)(s_app_ctx.tick_count % 10000U));
+    if ((fmt_ret < 0) || (fmt_ret >= (int)sizeof(status)))
+    {
+        ret = -1;
+    }
+    ret |= screen_oled_draw_text(0U, SCREEN_UI_STATUS_Y, status, 1U);
+
+    if (ret != 0)
+    {
+        if (s_app_ctx.render_failed == 0U)
+        {
+            s_app_ctx.render_failed = 1U;
+            liot_trace("[APP] oled text draw failed");
+        }
+    }
+    else
+    {
+        s_app_ctx.render_failed = 0U;
+    }
+
+    if (screen_oled_flush() != 0)
+    {
+        liot_trace("[APP] oled flush failed");
+    }
+}
+
+/**
+ * @brief 初始化应用队列、周期定时器与 OLED
+ * @return 0 成功，-1 队列/定时器失败
+ * @note OLED 初始化失败不阻塞主循环，串口会打印错误，便于单独排查接线
  */
 int screen_app_init(void)
 {
@@ -92,6 +165,16 @@ int screen_app_init(void)
     {
         liot_trace("[APP] timer start failed: %d", (int)ret);
         return -1;
+    }
+
+    if (screen_oled_init() == 0)
+    {
+        s_app_ctx.oled_ready = 1U;
+        screen_app_render();
+    }
+    else
+    {
+        liot_trace("[APP] oled init failed, display disabled");
     }
 
     liot_trace("[APP] init done, tick=%u ms", (unsigned)SCREEN_TICK_PERIOD_MS);
@@ -137,6 +220,7 @@ static void screen_app_handle_event(const screen_event_t *event)
             s_app_ctx.tick_count++;
             liot_trace("[APP] tick %u", (unsigned)s_app_ctx.tick_count);
             screen_led_tick(event->tick_ms);
+            screen_app_render();
             break;
 
         default:

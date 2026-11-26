@@ -112,6 +112,18 @@
 #define SCREEN_LINES_PER_PAGE       (2U)            /* 内容区每页 2 行 */
 #define SCREEN_PAGE_INTERVAL_MS     (4000U)         /* 多页时自动翻页间隔 */
 
+/* ------------------------------ TTS ------------------------------ */
+#define SCREEN_TTS_TASK_STACK       (10240U)        /* TTS 任务栈，合成 + 播放空间较大 */
+#define SCREEN_TTS_TASK_NAME        "screen_tts"
+#define SCREEN_TTS_QUEUE_DEPTH      (2U)            /* 播报请求队列深度 */
+#define SCREEN_TTS_VOLUME           (60)            /* 软件播放音量 0-100 */
+#define SCREEN_TTS_CODEC_VOLUME     (60)            /* ES8311 硬件音量 0-100 */
+#define SCREEN_TTS_POWER_ON_DELAY_MS (2000U)        /* 上电到音频初始化的等待时间 */
+#define SCREEN_TTS_MAX_WAIT_S       (30U)           /* 单次播报等待播放完成的最长秒数 */
+#define SCREEN_TTS_AUDIO_I2C_NUM    (0)             /* ES8311 挂在 I2C0 */
+#define SCREEN_TTS_AUDIO_I2S_NUM    (0)             /* 音频走 I2S0 */
+#define SCREEN_TTS_AUDIO_PA_GPIO    (11)            /* 功放使能 GPIO */
+
 /* ------------------------------ 时间换算 ------------------------------ */
 #define SCREEN_SECONDS_PER_MINUTE   (60U)           /* 每小时秒数换算系数 */
 #define SCREEN_MINUTES_PER_HOUR     (60U)           /* 每小时分钟数 */

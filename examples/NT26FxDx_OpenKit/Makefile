@@ -83,12 +83,17 @@ CFLAGS_INC += -I $(TOP)/$(CUSTOM_INC)
 CUSTOM_COBJSTEMP := $(patsubst $(TOP)/%.c,%.o,$(wildcard $(TOP)/$(CUSTOM_SRC)/*.c))
 PP_FILES += $(wildcard $(TOP)/$(CUSTOM_SRC)/*.c)
 
-# 本工程外设：骨架阶段只开 OLED，WS2812B 待引脚确认后再开
+# 本工程外设：OLED 常开；WS2812B 待引脚确认后再开
 BUILD_DRIVER_LCD_EN := y
 
-# Stage 6 再打开 TTS，避免前期编译变慢、镜像变大
-# BUILD_COMP_TTS_EN   := y
-# TTS_RESOURCE_TYPE   ?= 16k_zh
+# TTS：资源和库会占用 APP 区，采样率必须与音频配置保持一致
+BUILD_COMP_TTS_EN   := y
+TTS_RESOURCE_TYPE   ?= 16k_zh
+
+# TTS 资源占 604 KB，默认代码区只剩 208 KB（链接会溢出约 190 KB）。
+# 借用 256 KB 内部文件系统空间给代码区：FS 由 780 KB 降到约 524 KB，
+# 仍远大于 mem_map_chk.h 要求的 8 KB；本工程持久化用 NVM，不依赖该 FS。
+CODE_REGION_ADJUST  ?= 0x40000
 
 else ifeq ($(DEMO_NAME), demo_watch)
 

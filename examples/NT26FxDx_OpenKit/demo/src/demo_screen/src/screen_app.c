@@ -2,14 +2,14 @@
  * @file screen_app.c
  * @brief 云播报屏应用主任务与事件分发
  *
- * Stage 5 职责：
- *   1. 显示成功/重复下发/掉电恢复时向服务器回执 screen.ack；
- *   2. 新消息先写入 NVM，重启后恢复最后内容；
- *   3. 恢复的消息等 MQTT 上线后再回执 restored。
+ * Stage 6 职责：
+ *   1. tts=1 的消息交给独立 TTS 任务播报，播完回执 done；
+ *   2. 播报期间状态栏显示 SPEAK；
+ *   3. 新消息可打断旧播报，旧消息按 displayed 回执。
  *
  * @copyright Copyright (c) 2025 Lierda Technology Co., Ltd.
  * @date 2025-11-26
- * @version 1.5
+ * @version 1.6
  */
 
 #include <stdio.h>
@@ -27,6 +27,7 @@
 #include "screen_proto.h"
 #include "screen_store.h"
 #include "screen_text.h"
+#include "screen_tts.h"
 
 /* 未收到消息时的演示文本 */
 #define SCREEN_UI_TITLE_TEXT    "SCREEN DEMO"
@@ -54,6 +55,7 @@ typedef struct
     uint8_t      mqtt_online;   /*!< 上一轮是否已在线，用于检测上线沿 */
     uint8_t      restore_pending;   /*!< 有待补发的 restored 回执 */
     uint8_t      last_ack_done;     /*!< 上次回执是否已是 done */
+    uint8_t      tts_pending;       /*!< 等待 TTS 播报完成后回执 */
     uint32_t     page_elapsed_ms;                           /*!< 当前页已显示时长 */
     screen_msg_t last_msg;                                  /*!< 最近一条有效消息 */
     char         content_lines[SCREEN_MAX_LINES][SCREEN_LINE_MAX_BYTES]; /*!< 折行结果 */
@@ -115,10 +117,11 @@ static uint32_t screen_app_page_count(void)
  */
 static int screen_app_build_status(char *buf, size_t size)
 {
-    char     time_text[SCREEN_TIME_TEXT_LEN];
-    uint32_t pages;
-    int32_t  ts;
-    int      ret;
+    char       time_text[SCREEN_TIME_TEXT_LEN];
+    const char *state_text;
+    uint32_t   pages;
+    int32_t    ts;
+    int        ret;
 
     if ((buf == NULL) || (size == 0U))
     {
@@ -150,17 +153,19 @@ static int screen_app_build_status(char *buf, size_t size)
         time_text[sizeof(time_text) - 1U] = '\0';
     }
 
+    /* 播报期间优先显示 SPEAK，让现场一眼能看出正在说话 */
+    state_text = (screen_tts_is_busy() != 0U) ? "SPEAK"
+                                              : screen_mqtt_state_text();
+
     if (pages > 1U)
     {
-        ret = snprintf(buf, size, "%s %s P%u/%u", time_text,
-                       screen_mqtt_state_text(),
+        ret = snprintf(buf, size, "%s %s P%u/%u", time_text, state_text,
                        (unsigned)(s_app_ctx.page_index + 1U),
                        (unsigned)pages);
     }
     else
     {
-        ret = snprintf(buf, size, "%s %s", time_text,
-                       screen_mqtt_state_text());
+        ret = snprintf(buf, size, "%s %s", time_text, state_text);
     }
 
     if ((ret < 0) || (ret >= (int)size))
@@ -339,6 +344,50 @@ static void screen_app_check_online(void)
 }
 
 /**
+ * @brief TTS 播报结束回调（运行在 TTS 任务）
+ * @param[in] ok 1 播放完成，0 失败
+ * @return 无
+ * @note 不能在这里刷屏或回执，只投递事件给应用主任务
+ */
+static void screen_app_tts_done_cb(uint8_t ok)
+{
+    screen_event_t event;
+
+    memset(&event, 0, sizeof(event));
+    event.id = SCREEN_EV_TTS_DONE;
+    event.result = ok;
+    (void)screen_app_post(&event);
+}
+
+/**
+ * @brief 处理播报结束事件
+ * @param[in] ok 1 播放完成，0 失败
+ * @return 无
+ */
+static void screen_app_handle_tts_done(uint8_t ok)
+{
+    if (s_app_ctx.tts_pending == 0U)
+    {
+        return;
+    }
+
+    s_app_ctx.tts_pending = 0U;
+
+    if (ok != 0U)
+    {
+        screen_app_send_ack("done", 1U, NULL);
+        s_app_ctx.last_ack_done = 1U;
+    }
+    else
+    {
+        /* 内容已显示、播报未完成，按 displayed 回执 */
+        screen_app_send_ack("displayed", 1U, NULL);
+    }
+
+    screen_app_render();    /* 状态栏从 SPEAK 恢复 */
+}
+
+/**
  * @brief 初始化应用队列、周期定时器、OLED 与网络
  * @return 0 成功，-1 队列/定时器失败
  * @note 外设初始化失败不阻塞主循环，串口会打印错误，便于单独排查
@@ -406,6 +455,16 @@ int screen_app_init(void)
     {
         /* 下行报文统一交给应用主任务解析，避免在 MQTT 回调里做重活 */
         screen_mqtt_set_rx_handler(screen_app_rx_bridge);
+    }
+
+    /* TTS 任务启动后自行初始化音频，初始化较慢但不阻塞界面 */
+    if (screen_tts_init() != 0)
+    {
+        liot_trace("[APP] tts init failed, voice disabled");
+    }
+    else
+    {
+        screen_tts_set_done_cb(screen_app_tts_done_cb);
     }
 
     return 0;
@@ -546,6 +605,11 @@ static void screen_app_handle_downlink(const screen_event_t *event)
             screen_app_send_ack("restored", 1U, NULL);
             s_app_ctx.restore_pending = 0U;
         }
+        else if (s_app_ctx.tts_pending != 0U)
+        {
+            /* 播报还没结束，重复消息只能确认“已显示” */
+            screen_app_send_ack("displayed", 1U, NULL);
+        }
         else
         {
             screen_app_send_ack((s_app_ctx.last_ack_done != 0U) ? "done"
@@ -553,6 +617,14 @@ static void screen_app_handle_downlink(const screen_event_t *event)
                                 1U, NULL);
         }
         return;
+    }
+
+    /* 新消息打断未完成的播报：上一条只按 displayed 回执 */
+    if (s_app_ctx.tts_pending != 0U)
+    {
+        screen_app_send_ack("displayed", 1U, NULL);
+        s_app_ctx.tts_pending = 0U;
+        screen_tts_stop();
     }
 
     s_app_ctx.last_msg = s_rx_msg;
@@ -585,6 +657,19 @@ static void screen_app_handle_downlink(const screen_event_t *event)
     if (s_app_ctx.oled_ready == 0U)
     {
         screen_app_send_ack("failed", 0U, "display unavailable");
+    }
+    else if (s_rx_msg.tts == SCREEN_MSG_TTS_ON)
+    {
+        /* 需要播报：等 TTS 播完再回执 done；入队失败则退化为 displayed */
+        if (screen_tts_speak(s_rx_msg.content) == 0)
+        {
+            s_app_ctx.tts_pending = 1U;
+        }
+        else
+        {
+            liot_trace("[APP] tts enqueue failed, ack displayed");
+            screen_app_send_ack("displayed", 1U, NULL);
+        }
     }
     else
     {
@@ -621,6 +706,10 @@ static void screen_app_handle_event(const screen_event_t *event)
             {
                 liot_rtos_free(event->data);    /* 生产者申请，消费者释放 */
             }
+            break;
+
+        case SCREEN_EV_TTS_DONE:
+            screen_app_handle_tts_done(event->result);
             break;
 
         default:

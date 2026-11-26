@@ -24,6 +24,7 @@ typedef enum
     SCREEN_EV_NONE = 0,     /*!< 无效事件，便于 memset 后判空 */
     SCREEN_EV_TICK,         /*!< 周期 tick，用于刷新状态栏 */
     SCREEN_EV_DOWNLINK,     /*!< 收到一条 MQTT 下行报文 */
+    SCREEN_EV_TTS_DONE,     /*!< TTS 播报结束 */
     SCREEN_EV_MAX           /*!< 枚举上界，不参与业务 */
 } screen_event_id_e;
 
@@ -37,6 +38,7 @@ typedef struct
     screen_event_id_e id;       /*!< 事件类型 */
     uint32_t          tick_ms;  /*!< 事件携带的周期值，单位 ms */
     uint16_t          data_len; /*!< 下行载荷长度 */
+    uint8_t           result;   /*!< TTS_DONE 使用：1 成功，0 失败 */
     uint8_t          *data;     /*!< 下行载荷指针，可为 NULL */
 } screen_event_t;
 

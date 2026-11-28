@@ -626,6 +626,24 @@ static void screen_app_handle_downlink(const screen_event_t *event)
         return;
     }
 
+    /* 服务器在设备上线后会补发或重放旧消息（例如保留了最后一条），
+     * 比当前显示内容更旧的报文不能覆盖新内容。 */
+    if ((s_app_ctx.has_msg != 0U) &&
+        (s_rx_msg.ts != 0U) && (s_app_ctx.last_msg.ts != 0U) &&
+        (s_rx_msg.ts < s_app_ctx.last_msg.ts))
+    {
+        liot_trace("[APP] stale msg ts=%u < %u, ignored",
+                   (unsigned)s_rx_msg.ts, (unsigned)s_app_ctx.last_msg.ts);
+
+        /* 用被忽略报文自己的 msgId 回执：该内容更早已经显示过，
+         * 按 displayed 处理可以让服务器停止重发。 */
+        if (screen_mqtt_send_ack(s_rx_msg.msg_id, "displayed", 1U, NULL) != 0)
+        {
+            liot_trace("[APP] stale ack enqueue failed");
+        }
+        return;
+    }
+
     /* 新消息打断未完成的播报：上一条只按 displayed 回执 */
     if (s_app_ctx.tts_pending != 0U)
     {

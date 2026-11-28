@@ -464,6 +464,8 @@ static int screen_mqtt_datacall(void)
                                              SCREEN_NET_REG_TIMEOUT_S)) != LIOT_DATACALL_SUCCESS)
     {
         times++;
+        liot_trace("[MQTT] register wait failed: 0x%x (try %d)",
+                   (unsigned)ret, times);
         if (times >= SCREEN_NET_REG_RETRY_MAX)
         {
             liot_trace("[MQTT] network register timeout");
@@ -682,6 +684,11 @@ static void screen_mqtt_task(void *arg)
         {
             (void)liot_mqtt_client_deinit(&s_mqtt_ctx.client);
             s_mqtt_ctx.client = 0;
+
+            /* 连不上说明 PDP 可能已经失效（拔卡、掉网），释放后由下一轮
+             * datacall 重新激活，避免一直拿着死链路重试。 */
+            (void)liot_stop_data_call(SCREEN_SIM_ID, SCREEN_DATA_CALL_CID);
+
             s_mqtt_ctx.state = SCREEN_MQTT_STATE_RETRY;
             liot_rtos_task_sleep_ms(SCREEN_MQTT_RETRY_DELAY_MS);
             continue;
@@ -722,12 +729,10 @@ static void screen_mqtt_task(void *arg)
         (void)liot_mqtt_client_deinit(&s_mqtt_ctx.client);
         s_mqtt_ctx.client = 0;
 
-        /* 断链可能来自拔卡或掉网，残留的 PDP 会让下一轮误判“已激活”，
-         * 这里主动释放，重连时由 datacall 重新激活。 */
-        (void)liot_stop_data_call(SCREEN_SIM_ID, SCREEN_DATA_CALL_CID);
-
+        /* 断链不等于 PDP 失效（多数是服务器或链路抖动），这里先保留 PDP，
+         * 下一轮直接重连最快；只有连不上时才释放 PDP 重新激活。 */
         s_mqtt_ctx.state = SCREEN_MQTT_STATE_RETRY;
-        liot_trace("[MQTT] link lost, data call released, retry");
+        liot_trace("[MQTT] link lost, retry");
         liot_rtos_task_sleep_ms(SCREEN_MQTT_RETRY_DELAY_MS);
     }
 }

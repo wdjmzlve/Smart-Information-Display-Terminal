@@ -124,10 +124,9 @@
 #define SCREEN_TTS_AUDIO_I2C_NUM    (0)             /* ES8311 挂在 I2C0 */
 #define SCREEN_TTS_AUDIO_I2S_NUM    (0)             /* 音频走 I2S0 */
 #define SCREEN_TTS_AUDIO_PA_GPIO    (11)            /* 功放使能 GPIO */
-#define SCREEN_TTS_PRESILENCE_MS    (200U)          /* 起播前的静音预热时长，避免首字被吞 */
-#define SCREEN_TTS_BYTES_PER_MS     (32U)           /* 16 kHz × 16 bit × 单声道 = 32 字节/ms */
-#define SCREEN_TTS_PRESILENCE_BYTES (SCREEN_TTS_PRESILENCE_MS * SCREEN_TTS_BYTES_PER_MS)
+#define SCREEN_TTS_LEAD_PAUSE       "，"            /* 播报前置停顿：让音频通路爬坡落在静音上，避免首字被吞 */
 #define SCREEN_TTS_STOP_SETTLE_MS   (50U)           /* 停止播放后等待音频通路稳定的时间 */
+#define SCREEN_TTS_PLAY_RETRY_MS    (10U)           /* 首个音频块被拒后重试前的等待时间 */
 
 /* ------------------------------ 三色灯 WS2812B ------------------------------ */
 #define SCREEN_LED_COUNT            (3U)            /* 板载 WS2812B 灯珠数量 */

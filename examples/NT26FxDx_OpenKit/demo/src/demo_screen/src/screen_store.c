@@ -1,14 +1,19 @@
 /**
  * @file screen_store.c
- * @brief 最后一条消息的 NVM 持久化
+ * @brief 最后一条消息的掉电存储
+ *
+ * 使用 SDK 的 NVRAM 保留分区（2 KB，用户不可擦除），而不是内部文件系统：
+ * 文件系统分区会随 flash 布局（CODE_REGION_ADJUST、TTS 资源）变化而移动，
+ * 分区里的旧数据在新布局下不可用，会导致掉电恢复失效。
  *
  * 存储结构带 magic 与版本号，读取时校验，避免旧数据或损坏数据被当成有效消息。
  *
  * @copyright Copyright (c) 2025 Lierda Technology Co., Ltd.
- * @date 2025-11-26
- * @version 1.0
+ * @date 2025-11-28
+ * @version 2.0
  */
 
+#include <stdbool.h>
 #include <string.h>
 
 #include "liot_log.h"
@@ -20,9 +25,10 @@
 
 #define SCREEN_STORE_MAGIC      (0x5343524EU)   /*!< 'SCRN'，用于识别本模块的数据 */
 #define SCREEN_STORE_VERSION    (1U)            /*!< 结构版本，字段变化时递增 */
+#define SCREEN_STORE_OFFSET     (0U)            /*!< 在 NVRAM 保留分区中的偏移 */
 
 /**
- * @brief NVM 中实际保存的数据块
+ * @brief 掉电保存的数据块
  */
 typedef struct
 {
@@ -36,11 +42,11 @@ typedef struct
  * @brief 保存最后一条消息
  * @param[in] msg 待保存消息
  * @return 0 成功，-1 失败
+ * @note NVRAM 写入寿命有限，只在收到新消息时写一次
  */
 int screen_store_save(const screen_msg_t *msg)
 {
     screen_store_blob_t blob;
-    int ret;
 
     if (msg == NULL)
     {
@@ -52,10 +58,9 @@ int screen_store_save(const screen_msg_t *msg)
     blob.version = SCREEN_STORE_VERSION;
     blob.msg = *msg;
 
-    ret = liot_cust_nvm_fwrite(&blob, sizeof(blob), 1U);
-    if (ret != (int)sizeof(blob))
+    if (Liot_nvmWrite((UINT8 *)&blob, (UINT32)sizeof(blob), SCREEN_STORE_OFFSET) != true)
     {
-        liot_trace("[STORE] save failed: %d", ret);
+        liot_trace("[STORE] save failed");
         return -1;
     }
 
@@ -71,7 +76,6 @@ int screen_store_save(const screen_msg_t *msg)
 int screen_store_load(screen_msg_t *msg)
 {
     screen_store_blob_t blob;
-    int ret;
 
     if (msg == NULL)
     {
@@ -79,17 +83,16 @@ int screen_store_load(screen_msg_t *msg)
     }
 
     memset(&blob, 0, sizeof(blob));
-    ret = liot_cust_nvm_fread(&blob, sizeof(blob), 1U);
-    if (ret != (int)sizeof(blob))
+    if (Liot_nvmRead((UINT8 *)&blob, (UINT32)sizeof(blob), SCREEN_STORE_OFFSET) != true)
     {
-        liot_trace("[STORE] no saved message: %d", ret);
+        liot_trace("[STORE] read failed");
         return -1;
     }
 
     if ((blob.magic != SCREEN_STORE_MAGIC) ||
         (blob.version != SCREEN_STORE_VERSION))
     {
-        liot_trace("[STORE] invalid record, magic=0x%08X ver=%u",
+        liot_trace("[STORE] no valid record, magic=0x%08X ver=%u",
                    (unsigned)blob.magic, (unsigned)blob.version);
         return -1;
     }

@@ -13,6 +13,7 @@
  * @version 1.0
  */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "liot_audio2.h"
@@ -54,11 +55,6 @@ typedef struct
 } screen_tts_ctx_t;
 
 static screen_tts_ctx_t s_tts_ctx;
-
-/* 起播前的静音缓冲：BSS 段默认全 0，不占 flash。
- * 音频通路（I2S / ES8311 / PA）在第一次写入时才完成上电爬坡，
- * 直接送语音会吞掉第一个音素，所以每段播报前先播一小段静音。 */
-static uint8_t s_presilence[SCREEN_TTS_PRESILENCE_BYTES];
 
 /**
  * @brief 读取 TTS 资源
@@ -105,6 +101,15 @@ static int screen_tts_output_cb(void *context, int msg, int ds, int param2,
     }
 
     ret = Liot_AudioPlay((uint8_t *)dBuffer, dSize);
+
+    /* 第一块数据最容易赶在音频通路启动过程中被拒，稍等后重发一次，
+     * 否则被丢掉的正好是第一个字。 */
+    if ((ret != L_AUD_ERR_SUCCESS) && (s_tts_ctx.output_count == 1U))
+    {
+        liot_rtos_task_sleep_ms(SCREEN_TTS_PLAY_RETRY_MS);
+        ret = Liot_AudioPlay((uint8_t *)dBuffer, dSize);
+    }
+
     if (ret != L_AUD_ERR_SUCCESS)
     {
         if (s_tts_ctx.play_error == 0U)
@@ -208,11 +213,17 @@ static int screen_tts_hw_init(void)
                (unsigned)PKGFLXTTS_RES_ADDR, (unsigned)PKGFLXTTS_RES_SIZE,
                res_head[0], res_head[1], res_head[2], res_head[3]);
 
-    /* 全 FF 表示该区域是擦除态：烧录包里没带 TTS 资源，必须整包烧录 */
+    /* TTS 资源文件以 "IsResV4" 开头（49 73 52 65）。
+     * 全 FF 表示该区域是擦除态；其他值说明烧录类型不对，资源没有写到这个地址。 */
     if ((res_head[0] == 0xFFU) && (res_head[1] == 0xFFU) &&
         (res_head[2] == 0xFFU) && (res_head[3] == 0xFFU))
     {
         liot_trace("[TTS] resource empty, flash with type=full");
+    }
+    else if ((res_head[0] != 0x49U) || (res_head[1] != 0x73U) ||
+             (res_head[2] != 0x52U) || (res_head[3] != 0x65U))
+    {
+        liot_trace("[TTS] resource not found at this address, flash with type=full");
     }
 
     liot_tts_set_resource((void *)PKGFLXTTS_RES_ADDR, screen_tts_read_res_cb);
@@ -284,6 +295,8 @@ static uint8_t screen_tts_wait_finish(void)
 static void screen_tts_task(void *arg)
 {
     screen_tts_msg_t msg;
+    char             speak_text[SCREEN_MSG_CONTENT_MAX_LEN + 4U];
+    int              fmt_ret;
     uint8_t          ok;
 
     (void)arg;
@@ -336,12 +349,25 @@ static void screen_tts_task(void *arg)
         s_tts_ctx.output_count = 0U;
         s_tts_ctx.busy = 1U;
 
-        /* 预热音频通路，避免第一个字被吞 */
-        (void)Liot_AudioPlay(s_presilence, (int)sizeof(s_presilence));
+        /* 在正文前加一个停顿：音频通路的上电爬坡落在静音上，
+         * 第一个字就能完整播出。不能用 Liot_AudioPlay() 预播静音——
+         * 那会让驱动先进入播放态，TTS 回调里的写入反而全部被丢弃。 */
+        fmt_ret = snprintf(speak_text, sizeof(speak_text),
+                           SCREEN_TTS_LEAD_PAUSE "%s", msg.text);
+        if ((fmt_ret < 0) || (fmt_ret >= (int)sizeof(speak_text)))
+        {
+            liot_trace("[TTS] build text failed");
+            s_tts_ctx.busy = 0U;
+            if (s_tts_ctx.done_cb != NULL)
+            {
+                s_tts_ctx.done_cb(0U);
+            }
+            continue;
+        }
 
-        liot_trace("[TTS] speak len=%u", (unsigned)strlen(msg.text));
+        liot_trace("[TTS] speak len=%u", (unsigned)strlen(speak_text));
 
-        if (liot_tts_start(msg.text, (unsigned int)strlen(msg.text)) !=
+        if (liot_tts_start(speak_text, (unsigned int)strlen(speak_text)) !=
             LIOT_TTS_SUCCESS)
         {
             liot_trace("[TTS] start failed");

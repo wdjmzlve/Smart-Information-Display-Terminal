@@ -55,6 +55,11 @@ typedef struct
 
 static screen_tts_ctx_t s_tts_ctx;
 
+/* 起播前的静音缓冲：BSS 段默认全 0，不占 flash。
+ * 音频通路（I2S / ES8311 / PA）在第一次写入时才完成上电爬坡，
+ * 直接送语音会吞掉第一个音素，所以每段播报前先播一小段静音。 */
+static uint8_t s_presilence[SCREEN_TTS_PRESILENCE_BYTES];
+
 /**
  * @brief 读取 TTS 资源
  * @param[in]  pParameter 资源起始地址
@@ -250,6 +255,7 @@ static uint8_t screen_tts_wait_finish(void)
         if (s_tts_ctx.stop_requested != 0U)
         {
             (void)Liot_AudioStop();
+            liot_rtos_task_sleep_ms(SCREEN_TTS_STOP_SETTLE_MS);
             return 0U;
         }
 
@@ -266,6 +272,7 @@ static uint8_t screen_tts_wait_finish(void)
     liot_trace("[TTS] wait finish timeout, finish=%u",
                (unsigned)s_tts_ctx.finish_tick);
     (void)Liot_AudioStop();
+    liot_rtos_task_sleep_ms(SCREEN_TTS_STOP_SETTLE_MS);
     return 0U;
 }
 
@@ -328,6 +335,9 @@ static void screen_tts_task(void *arg)
         s_tts_ctx.last_play_tick = 0U;
         s_tts_ctx.output_count = 0U;
         s_tts_ctx.busy = 1U;
+
+        /* 预热音频通路，避免第一个字被吞 */
+        (void)Liot_AudioPlay(s_presilence, (int)sizeof(s_presilence));
 
         liot_trace("[TTS] speak len=%u", (unsigned)strlen(msg.text));
 

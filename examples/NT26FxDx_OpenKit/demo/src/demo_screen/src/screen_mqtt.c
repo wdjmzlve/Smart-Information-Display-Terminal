@@ -24,6 +24,7 @@
 #include "liot_mqtt_client.h"
 #include "liot_nw.h"
 #include "liot_os.h"
+#include "liot_sim.h"
 
 #include "screen_config.h"
 #include "screen_mqtt.h"
@@ -69,6 +70,7 @@ typedef struct
 
     volatile uint8_t connected;             /*!< 1=已连接 */
     volatile screen_mqtt_state_e state;     /*!< 当前状态 */
+    uint8_t sim_missing;                    /*!< 1=上一轮检测到无卡，用于抑制重复日志 */
     screen_mqtt_rx_handler_t rx_handler;    /*!< 下行报文回调，可为 NULL */
 } screen_mqtt_ctx_t;
 
@@ -436,7 +438,27 @@ static void screen_mqtt_hb_timer_cb(void *arg)
 static int screen_mqtt_datacall(void)
 {
     liot_datacall_errcode_e ret;
+    liot_sim_status_e       sim_status = LIOT_SIM_STATUS_UNKNOW;
     int times = 0;
+
+    /* 拔卡后不要干等注网超时：先看卡状态，没有卡就立刻返回，
+     * 让状态栏回到 RTRY 并在下一轮重新尝试，插回卡后能尽快恢复。 */
+    if (liot_sim_get_card_status(SCREEN_SIM_ID, &sim_status) == LIOT_SIM_SUCCESS)
+    {
+        if ((sim_status == LIOT_SIM_STATUS_NOSIM) ||
+            (sim_status == LIOT_SIM_STATUS_UNKNOW))
+        {
+            /* 只在状态变化时打印，避免拔卡期间每轮刷屏 */
+            if (s_mqtt_ctx.sim_missing == 0U)
+            {
+                liot_trace("[MQTT] sim unavailable, status=%d", (int)sim_status);
+                s_mqtt_ctx.sim_missing = 1U;
+            }
+            return -1;
+        }
+
+        s_mqtt_ctx.sim_missing = 0U;
+    }
 
     while ((ret = liot_network_register_wait(SCREEN_SIM_ID,
                                              SCREEN_NET_REG_TIMEOUT_S)) != LIOT_DATACALL_SUCCESS)
@@ -450,11 +472,16 @@ static int screen_mqtt_datacall(void)
         liot_rtos_task_sleep_ms(SCREEN_NET_RETRY_DELAY_MS);
     }
 
+    /* 关掉异步激活，才能拿到真实的 PDP 激活结果 */
+    (void)liot_set_data_call_asyn_mode(SCREEN_SIM_ID, SCREEN_DATA_CALL_CID, 0);
+
     ret = liot_start_data_call(SCREEN_SIM_ID, SCREEN_DATA_CALL_CID,
                                LIOT_DATA_TYPE_IP, "", "", "",
                                LIOT_DATA_AUTH_TYPE_NONE);
     if ((ret != LIOT_DATACALL_SUCCESS) && (ret != LIOT_DATACALL_REPEAT_ACTIVE_ERR))
     {
+        /* 失败时清掉残留 PDP，否则下一轮会一直误报“已激活” */
+        (void)liot_stop_data_call(SCREEN_SIM_ID, SCREEN_DATA_CALL_CID);
         liot_trace("[MQTT] data call failed: 0x%x", (unsigned)ret);
         return -1;
     }
@@ -608,6 +635,8 @@ static int screen_mqtt_connect_once(void)
  */
 static void screen_mqtt_task(void *arg)
 {
+    uint32_t last_recovery_tick;
+
     (void)arg;
 
     if (screen_mqtt_prepare_device() != 0)
@@ -621,6 +650,7 @@ static void screen_mqtt_task(void *arg)
     }
 
     s_mqtt_ctx.start_tick = liot_rtos_get_system_tick();
+    last_recovery_tick = s_mqtt_ctx.start_tick;
 
     while (1)
     {
@@ -628,6 +658,21 @@ static void screen_mqtt_task(void *arg)
         if (screen_mqtt_datacall() != 0)
         {
             s_mqtt_ctx.state = SCREEN_MQTT_STATE_RETRY;
+
+            /* 拔卡或长时间注不上网时，模组可能不会重新识别 SIM；
+             * 定期把射频从最小功能切回全功能，强制重新初始化。 */
+            if ((liot_rtos_get_system_tick() - last_recovery_tick) >=
+                SCREEN_NET_RECOVERY_PERIOD_MS)
+            {
+                last_recovery_tick = liot_rtos_get_system_tick();
+                liot_trace("[MQTT] modem recovery: restart radio");
+
+                (void)liot_dev_set_modem_fun(LIOT_DEV_CFUN_MIN, 0U, SCREEN_SIM_ID);
+                liot_rtos_task_sleep_s(2);
+                (void)liot_dev_set_modem_fun(LIOT_DEV_CFUN_FULL, 0U, SCREEN_SIM_ID);
+                liot_rtos_task_sleep_s(2);
+            }
+
             liot_rtos_task_sleep_ms(SCREEN_MQTT_RETRY_DELAY_MS);
             continue;
         }
@@ -676,8 +721,13 @@ static void screen_mqtt_task(void *arg)
         (void)liot_rtos_timer_stop(s_mqtt_ctx.hb_timer);
         (void)liot_mqtt_client_deinit(&s_mqtt_ctx.client);
         s_mqtt_ctx.client = 0;
+
+        /* 断链可能来自拔卡或掉网，残留的 PDP 会让下一轮误判“已激活”，
+         * 这里主动释放，重连时由 datacall 重新激活。 */
+        (void)liot_stop_data_call(SCREEN_SIM_ID, SCREEN_DATA_CALL_CID);
+
         s_mqtt_ctx.state = SCREEN_MQTT_STATE_RETRY;
-        liot_trace("[MQTT] link lost, retry");
+        liot_trace("[MQTT] link lost, data call released, retry");
         liot_rtos_task_sleep_ms(SCREEN_MQTT_RETRY_DELAY_MS);
     }
 }

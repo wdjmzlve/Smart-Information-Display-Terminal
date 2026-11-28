@@ -69,9 +69,10 @@
 /* ------------------------------ 网络参数 ------------------------------ */
 #define SCREEN_DATA_CALL_CID            (1)         /* PDP 上下文编号 */
 #define SCREEN_SIM_ID                   (0U)        /* SIM 卡序号 */
-#define SCREEN_NET_REG_TIMEOUT_S        (120U)      /* 单次等待注网超时 */
-#define SCREEN_NET_REG_RETRY_MAX        (10U)       /* 注网重试次数 */
+#define SCREEN_NET_REG_TIMEOUT_S        (20U)       /* 单次等待注网超时，拔卡后能快速返回 */
+#define SCREEN_NET_REG_RETRY_MAX        (3U)        /* 单轮注网重试次数，失败后回到 RTRY 再重来 */
 #define SCREEN_NET_RETRY_DELAY_MS       (1000U)     /* 注网重试间隔 */
+#define SCREEN_NET_RECOVERY_PERIOD_MS   (60000U)    /* 长时间注不上网时，两次模组射频复位的最小间隔 */
 
 /* ------------------------------ 下行消息 ------------------------------ */
 #define SCREEN_DOWNLINK_MAX_LEN         (512U)      /* 单条 MQTT 下行载荷上限 */
@@ -123,6 +124,10 @@
 #define SCREEN_TTS_AUDIO_I2C_NUM    (0)             /* ES8311 挂在 I2C0 */
 #define SCREEN_TTS_AUDIO_I2S_NUM    (0)             /* 音频走 I2S0 */
 #define SCREEN_TTS_AUDIO_PA_GPIO    (11)            /* 功放使能 GPIO */
+#define SCREEN_TTS_PRESILENCE_MS    (200U)          /* 起播前的静音预热时长，避免首字被吞 */
+#define SCREEN_TTS_BYTES_PER_MS     (32U)           /* 16 kHz × 16 bit × 单声道 = 32 字节/ms */
+#define SCREEN_TTS_PRESILENCE_BYTES (SCREEN_TTS_PRESILENCE_MS * SCREEN_TTS_BYTES_PER_MS)
+#define SCREEN_TTS_STOP_SETTLE_MS   (50U)           /* 停止播放后等待音频通路稳定的时间 */
 
 /* ------------------------------ 三色灯 WS2812B ------------------------------ */
 #define SCREEN_LED_COUNT            (3U)            /* 板载 WS2812B 灯珠数量 */
